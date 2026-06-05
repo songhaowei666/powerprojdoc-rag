@@ -353,7 +353,7 @@ if __name__ == "__main__":
     pipeline = Pipeline(root_path, run_config=max_config)
     
     print('4. 将pdf转化为纯markdown文本')
-    #pipeline.export_reports_to_markdown('【财报】中芯国际：中芯国际2024年年度报告.pdf') 
+    pipeline.export_reports_to_markdown('【财报】中芯国际：中芯国际2024年年度报告.pdf') 
 
     # 5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports
     # print('5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports')
