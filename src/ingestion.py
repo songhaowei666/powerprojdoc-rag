@@ -112,7 +112,7 @@ class VectorDBIngestor:
                     with open(LOG_FILE, 'a', encoding='utf-8') as f:
                         f.write("DashScope返回的embedding为空，文本内容如下：\n{}\n{}\n".format(batch[0] if batch else None, '-'*60))
                     raise RuntimeError("DashScope返回的embedding为空，文本内容已写入 {}".format(LOG_FILE))
-                embeddings.append(resp.output.embedding)
+                embeddings.append(resp['output']['embedding'])
             else:
                 print('33333333')
                 raise RuntimeError(f"DashScope embedding API返回格式异常: {resp}")
