@@ -1,0 +1,40 @@
+
+# 配置检索器的元数据字段
+metadata_field_info = [
+       AttributeInfo(
+              name="title",
+              description="视频标题（@@@字符串）@@@",
+              type="string",
+       ),
+       AttributeInfo(
+              name="author",
+              description="视频作者（@@@字符串）@@@",
+              type="string",
+       ),
+       AttributeInfo(
+              name="view_count",
+              description="视频观看次数（@@@整数）@@@",
+              type="integer",
+       ),
+       AttributeInfo(
+              name="publish_date",
+              description="视频发布日期，格式为YYYY-MM-DD的字符串",
+              type="string",
+       ),
+       AttributeInfo(
+              name="length",
+              description="视频长度，以秒为单位的整数",
+              type="integer",
+       ),
+]
+# 创建自查询检索器SelfQueryRetriever
+llm = ChatDeepSeek(model="deepseek-chat", temperature=0)  # 确定性输出
+retriever = SelfQueryRetriever.from_llm(
+       llm=llm,
+       vectorstore=vectorstore,
+       document_contents="包含视频标题、作者、观看次数、发布日期等信息的视频元数据",
+       metadata_field_info=metadata_field_info,
+       enable_limit=True,
+       verbose=True
+)
+# 执行示例查询
