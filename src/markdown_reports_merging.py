@@ -1,11 +1,15 @@
 import json
 import os
 import re
+import sys
 from io import StringIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+
+# 将项目根目录加入 sys.path，支持直接运行本文件
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.parsed_reports_merging import PageTextPreparation
 
@@ -254,6 +258,15 @@ class MinerUReportMerger:
 
 
 if __name__ == "__main__":
+    """
+    本地调试入口：对单份 MinerU 解析后的 JSON 报告进行合并测试。
+
+    流程：
+        1. 定位示例 JSON 文件、输出目录及 subset.csv 元数据文件；
+        2. 实例化 MinerUReportMerger；
+        3. 调用 process_reports 完成页面合并与元数据注入；
+        4. 打印公司名称、总页数及首页前 400 字符预览。
+    """
     root = Path(__file__).resolve().parent.parent
     json_path = (
         root

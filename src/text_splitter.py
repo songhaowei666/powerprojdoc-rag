@@ -201,3 +201,22 @@ class TextSplitter():
                 json.dump({"metainfo": metainfo, "content": {"chunks": chunks}}, f, ensure_ascii=False, indent=2)
             print(f"已处理: {md_path.name} -> {output_json_path.name}")
         print(f"共分割 {len(all_md_paths)} 个 markdown 文件")
+
+
+if __name__ == "__main__":
+    """
+    本地调试入口：对 merged_reports 目录下的 JSON 报告进行文本分块测试。
+    """
+    root = Path(__file__).resolve().parent.parent
+    text_splitter = TextSplitter()
+
+    # 默认路径与 PipelineConfig 保持一致
+    merged_reports_path = root / "data" / "stock_data" / "debug_data" / "02_merged_reports"
+    documents_dir = root / "data" / "stock_data" / "databases" / "chunked_reports"
+    serialized_tables_dir = None
+
+    text_splitter.split_all_reports(
+        all_report_dir=merged_reports_path,
+        output_dir=documents_dir,
+        serialized_tables_dir=serialized_tables_dir,
+    )

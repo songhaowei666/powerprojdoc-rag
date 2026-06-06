@@ -357,15 +357,15 @@ if __name__ == "__main__":
 
     # 5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports
     # print('5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports')
-    # pipeline.chunk_reports2() 
+    pipeline.chunk_reports2() 
     
     # 6. 从分块报告创建向量数据库，输出到 databases/vector_dbs
     print('6. 从分块报告创建向量数据库，输出到 databases/vector_dbs')
     pipeline.create_vector_dbs()     
     
-    # # 7. 处理问题并生成答案，具体逻辑取决于 run_config
-    # # 默认questions.json
-    # print('7. 处理问题并生成答案，具体逻辑取决于 run_config')
-    # pipeline.process_questions() 
+    # 7. 处理问题并生成答案，具体逻辑取决于 run_config
+    # 默认questions.json
+    print('7. 处理问题并生成答案，具体逻辑取决于 run_config')
+    pipeline.process_questions() 
     
     print('完成')
