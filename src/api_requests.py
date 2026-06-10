@@ -1,8 +1,16 @@
+import sys
+from pathlib import Path
+
+# 将项目根目录加入 sys.path，解决直接运行时的模块导入问题
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
 import os
 import json
 from dotenv import load_dotenv
 from typing import Union, List, Dict, Type, Optional, Literal
-from openai import OpenAI
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
 import asyncio
 from src.api_request_parallel_processor import process_api_requests_from_file
 from openai.lib._parsing import type_to_response_format_param 
@@ -10,68 +18,82 @@ import tiktoken
 import src.prompts as prompts
 import requests
 from json_repair import repair_json
-from pydantic import BaseModel
-import google.generativeai as genai
+from pydantic import BaseModel, Field
+# import google.generativeai as genai
 from copy import deepcopy
 from tenacity import retry, stop_after_attempt, wait_fixed
 import dashscope
+from config  import settings
 
-# OpenAI基础处理器，封装了消息发送、结构化输出、计费等逻辑
+# OpenAI基础处理器，使用 LangChain 技术栈封装消息发送、结构化输出、计费等逻辑
 class BaseOpenaiProcessor:
     def __init__(self):
+        self.default_model = settings.chat_model
+        self.api_key = settings.openai_api_key
+        self.api_base = settings.openai_api_base
         self.llm = self.set_up_llm()
-        self.default_model = 'gpt-4o-2024-08-06'
-        # self.default_model = 'gpt-4o-mini-2024-07-18',
 
     def set_up_llm(self):
         # 加载OpenAI API密钥，初始化LLM
-        load_dotenv()
-        llm = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_API_BASE"),
-            timeout=None,
-            max_retries=2
-            )
-        return llm
+       
+        return ChatOpenAI(
+            model=self.default_model,
+            api_key=self.api_key,
+            base_url=self.api_base,
+            timeout=5,
+            max_retries=2,
+            temperature=0.5,
+        )
 
     def send_message(
         self,
         model=None,
         temperature=0.5,
-        seed=None, # For deterministic ouptputs
+        seed=None,  # For deterministic outputs
         system_content='You are a helpful assistant.',
         human_content='Hello!',
         is_structured=False,
         response_format=None
-        ):
+    ):
         # 发送消息到OpenAI，支持结构化/非结构化输出
         if model is None:
             model = self.default_model
-        params = {
-            "model": model,
-            "seed": seed,
-            "messages": [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": human_content}
-            ]
-        }
-        
-        # 部分模型不支持temperature
-        if "o3-mini" not in model:
-            params["temperature"] = temperature
-            
+
+        # 构建动态 LLM 参数（支持切换 model / temperature / seed）
+        # kwargs = {
+        #     "model": model,
+        #     "api_key": self.api_key,
+        #     "base_url": self.api_base,
+        #     "timeout": None,
+        #     "max_retries": 2,
+        #     "temperature": None if "o3-mini" in model else temperature,
+        # }
+        # if seed is not None:
+        #     kwargs["model_kwargs"] = {"seed": seed}
+
+        llm = self.llm
+
+        messages = [
+            SystemMessage(content=system_content),
+            HumanMessage(content=human_content),
+        ]
+
         if not is_structured:
-            completion = self.llm.chat.completions.create(**params)
-            content = completion.choices[0].message.content
+            response = llm.invoke(messages)
+            content = response.content
+            usage = response.response_metadata.get("token_usage", {})
 
         elif is_structured:
-            params["response_format"] = response_format
-            completion = self.llm.beta.chat.completions.parse(**params)
+            structured_llm = llm.with_structured_output(response_format)
+            response = structured_llm.invoke(messages)
+            content = response.model_dump() if hasattr(response, "model_dump") else response.dict()
+            usage = {}
 
-            response = completion.choices[0].message.parsed
-            content = response.dict()
-
-        self.response_data = {"model": completion.model, "input_tokens": completion.usage.prompt_tokens, "output_tokens": completion.usage.completion_tokens}
+        self.response_data = {
+            "model": model,
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        }
         print(self.response_data)
 
         return content
@@ -399,7 +421,8 @@ class APIProcessor:
         The underlying processor's send_message method is responsible for handling the parameters.
         """
         if model is None:
-            model = self.processor.default_model
+            from config import settings
+            model = settings.chat_model
         return self.processor.send_message(
             model=model,
             temperature=temperature,
@@ -751,3 +774,14 @@ class BaseDashscopeProcessor:
             # 如果不是有效的JSON，返回基本格式
             print(f"Content is not valid JSON, returning basic format: {content}")
             return {"final_answer": content, "step_by_step_analysis": "", "reasoning_summary": "", "relevant_pages": []}
+
+class MetadataFilterResponse2(BaseModel):
+    """元数据过滤条件 LLM 响应"""
+    filters: List[str] = Field(description="包含三个字符串的列表",max_length=3)
+if __name__ == "__main__":
+
+    chat_model = BaseOpenaiProcessor()
+    chat_model.send_message(system_content="你给我回复结构化数据",
+                            human_content="你可以随意发挥",
+                            is_structured=True,
+                            response_format=MetadataFilterResponse2)

@@ -14,9 +14,9 @@ from rank_bm25 import BM25Okapi
 # 将项目根目录加入 sys.path，支持直接运行本文件
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.openai_embedding import OpenAIEmbedder
-import faiss
-import numpy as np
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from src.openai_embedding import OpenAIEmbedder, default_embedder
 from tenacity import retry, wait_fixed, stop_after_attempt
 
 # BM25Ingestor：BM25索引构建与保存工具
@@ -59,8 +59,8 @@ class BM25Ingestor:
 # VectorDBIngestor：向量库构建与保存工具
 class VectorDBIngestor:
     def __init__(self):
-        # 复用 openai_embedding 中的 embedder 实例
-        self.embedder = OpenAIEmbedder()
+        # 复用 openai_embedding 中的默认 embedder 实例
+        self.embedder = default_embedder
 
     @retry(wait=wait_fixed(20), stop=stop_after_attempt(2))
     def _get_embeddings(self, text: Union[str, List[str]], model: str = "text-embedding-3-large") -> List[List[float]]:
@@ -89,47 +89,70 @@ class VectorDBIngestor:
             embedder = OpenAIEmbedder(model=model)
         return embedder.get_embeddings(text_chunks)
 
-    def _create_vector_db(self, embeddings: List[float]):
-        # 用faiss构建向量库，采用内积（余弦距离）
-        embeddings_array = np.array(embeddings, dtype=np.float32)
-        dimension = len(embeddings[0])
-        index = faiss.IndexFlatIP(dimension)  # Cosine distance
-        index.add(embeddings_array)
-        return index
-    
-    def _process_report(self, report: dict):
-        # 针对单份报告，提取文本块并生成向量库
-        text_chunks = [chunk['text'] for chunk in report['content']['chunks']]
-        # 过滤空内容，超长内容截断到 2048 字符
-        max_len = 2048
-        text_chunks = [t[:max_len] for t in text_chunks if len(t) > 0]
-        embeddings = self._get_embeddings(text_chunks)
-        index = self._create_vector_db(embeddings)
-        return index
+    def _build_docs(self, report: dict) -> List[Document]:
+        """针对单份报告，提取文本块并构建 Document 列表。"""
+        chunks = report.get("content", {}).get("chunks", [])
+        metainfo = report.get("metainfo", {})
+
+        docs = []
+        for chunk in chunks:
+            text = chunk.get("text", "")
+            if not text:
+                continue
+
+            # 截断超长文本
+            text = text[:2048]
+
+            docs.append(
+                Document(
+                    page_content=text,
+                    metadata={
+                        "chunk_id": chunk.get("id", 0),
+                        "chunk_type": chunk.get("type", ""),
+                        "page": chunk.get("page", 0),
+                        "length_tokens": chunk.get("length_tokens", 0),
+                        "sha1": metainfo.get("sha1", ""),
+                        "sha1_name": metainfo.get("sha1_name", ""),
+                        "company_name": metainfo.get("company_name", ""),
+                        "file_name": metainfo.get("file_name", ""),
+                        "pages_amount": metainfo.get("pages_amount", 0),
+                    }
+                )
+            )
+
+        return docs
 
     def process_reports(self, all_reports_dir: Path, output_dir: Path):
-        # 批量处理所有报告，生成并保存faiss向量库
+        """批量处理所有报告，生成并保存 ChromaDB 向量库。"""
         all_report_paths = list(all_reports_dir.glob("*.json"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        for report_path in tqdm(all_report_paths, desc="Processing reports for FAISS"):
+        vectorstore = None
+
+        for report_path in tqdm(all_report_paths, desc="Processing reports for ChromaDB"):
             # 加载报告
             with open(report_path, 'r', encoding='utf-8') as f:
                 report_data = json.load(f)
-            index = self._process_report(report_data)
-            # 用 metainfo['sha1'] 作为 faiss 文件名，避免中文和特殊字符
-            sha1 = report_data["metainfo"].get("sha1", "")
-            if not sha1:
-                raise ValueError(f"分块报告 {report_path} 缺少 sha1 字段，无法保存 faiss 文件！")
-            faiss_file_path = output_dir / f"{sha1}.faiss"
-            faiss.write_index(index, str(faiss_file_path))
+
+            docs = self._build_docs(report_data)
+            if not docs:
+                continue
+
+            if vectorstore is None:
+                vectorstore = Chroma.from_documents(
+                    documents=docs,
+                    embedding=self.embedder.client,
+                    persist_directory=str(output_dir),
+                )
+            else:
+                vectorstore.add_documents(docs)
 
         print(f"Processed {len(all_report_paths)} reports")
 
 
 if __name__ == "__main__":
     """
-    本地调试入口：读取分块后的 JSON 报告，为每个 chunk 生成 embedding 并保存为 FAISS 索引。
+    本地调试入口：读取分块后的 JSON 报告，为每个 chunk 生成 embedding 并保存为 ChromaDB 向量库。
     """
     root = Path(__file__).resolve().parent.parent
 

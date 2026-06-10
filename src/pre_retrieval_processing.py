@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+# 将项目根目录加入 sys.path，解决直接运行时的模块导入问题
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
 import logging
 from typing import List, Dict, Literal, Union
 from pydantic import BaseModel, Field
@@ -241,10 +248,10 @@ if __name__ == "__main__":
     mf = metadata_filter_builder.build(query)
     print("Metadata filter:", mf)
     
-    angles = multi_angle_query_builder.build(query)
-    print("Angles:", [a.model_dump() for a in angles])
+    # angles = multi_angle_query_builder.build(query)
+    # print("Angles:", [a.model_dump() for a in angles])
 
-    # 示例二：已传编码，直接复用
-    print("\n=== 示例二：已传编码 ===")
-    mf = metadata_filter_builder.build(query, unit_code="001")
-    print("Metadata filter:", mf)
+    # # 示例二：已传编码，直接复用
+    # print("\n=== 示例二：已传编码 ===")
+    # mf = metadata_filter_builder.build(query, unit_code="001")
+    # print("Metadata filter:", mf)
