@@ -1,5 +1,9 @@
 # Pre-Retrieval Processing Module Spec
 
+> **同步声明**：本文档严格反向推导自 `src/pre_retrieval_processing.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
+
+---
+
 ## 1. 概述
 
 `pre_retrieval_processing.py` 是 RAG 检索流程的前置处理模块，位于 `src/` 目录下。它负责在正式检索（BM25 / Vector / Hybrid）之前，对用户输入进行两项核心预处理：
@@ -51,7 +55,6 @@
 ```
 python >= 3.10
 pydantic
-pyyaml
 src.api_requests.APIProcessor
 ```
 
@@ -170,6 +173,11 @@ class MetadataFilterBuilder:
 - 模块内部将 LLM 输出转换为 ChromaDB `where` 格式：`{"unit_code": {"$eq": "001"}, "year": {"$gte": 2024}}`
 - 若查询中无法匹配任何元数据条件，返回 `{}`（空过滤）。
 
+**边界行为**：
+- 若 LLM 返回非字典类型，记录 warning 并返回 `{}`
+- `filters` 为空列表时返回 `{}`
+- 多条件自动用 `$and` 连接
+
 ### 6.2 MultiAngleQueryBuilder
 
 ```python
@@ -187,18 +195,21 @@ class MultiAngleQueryBuilder:
 | ② | `keyword_focus` | 关键词聚焦：提取查询中的核心实体、指标、时间，重组为关键词导向的查询 |
 | ③ | `structured_condition` | 结构化条件：补充隐含的时间范围、对比维度、限定条件，使查询更结构化 |
 
-**返回**：`List[QueryAngle]`，长度固定为 3，顺序与上表一致。
+**返回**：`List[QueryAngle]`，长度通常为 3，顺序固定为 semantic_expansion → keyword_focus → structured_condition。
 
-### 6.3 输出模型
+**边界行为**：
+- 若 LLM 返回角度缺失，记录 warning 并跳过该角度
+- 若 LLM 返回非字典类型，记录 warning 并返回 `[]`
+- 通过 `angle_map` 保证输出顺序与上述定义一致
+
+### 6.3 默认实例
+
+模块末尾预置两个默认实例，供其他模块直接导入使用：
 
 ```python
-class PreRetrievalResult(BaseModel):
-    original_query: str
-    metadata_filter: dict       # ChromaDB where 条件
-    angles: List[QueryAngle]    # 三个角度的查询变体
+metadata_filter_builder = MetadataFilterBuilder()
+multi_angle_query_builder = MultiAngleQueryBuilder()
 ```
-
-两个处理器各自独立使用，由调用方按需组合。无需统一集成类。
 
 ---
 
@@ -242,7 +253,7 @@ class MetadataFilterResponse(BaseModel):
 2. keyword_focus：关键词聚焦，提取核心实体、指标、时间，去掉冗余修饰。
 3. structured_condition：结构化条件，补充隐含的时间范围、对比维度、限定词。
 
-每个角度输出查询文本和生成理由。
+每个角度输出查询文本和生成理由。必须严格返回三个角度。
 ```
 
 **Response Format**：
@@ -324,6 +335,14 @@ result = PreRetrievalResult(
 )
 ```
 
+**直接使用默认实例**：
+```python
+from src.pre_retrieval_processing import metadata_filter_builder, multi_angle_query_builder
+
+mf = metadata_filter_builder.build("北京公司2024年营收增长原因")
+angles = multi_angle_query_builder.build("北京公司2024年营收增长原因")
+```
+
 ---
 
 ## 10. 版本记录
@@ -331,3 +350,4 @@ result = PreRetrievalResult(
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v0.1 | 2026-06-05 | 初始 Spec，引入 SelfQueryRetriever 思路，将功能一从"编码解析"升级为"元数据过滤条件生成"；27家省公司编码使用占位符 |
+| v0.2 | 2026-06-11 | 补充默认实例、边界行为（LLM 返回异常时的兜底）、角度顺序保证机制 |

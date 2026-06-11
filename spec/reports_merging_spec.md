@@ -1,6 +1,6 @@
 # Markdown Reports Merging Spec
 
-> **同步声明**：本文档严格反向推导自 `src/markdown_reports_merging.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
+> **同步声明**：本文档严格反向推导自 `src/markdown_reports_merging.py` 与 `src/parsed_reports_merging.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
 
 ---
 
@@ -116,7 +116,20 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 
 ## 4. 功能需求
 
-### 4.1 批量报告处理入口
+### 4.1 批量报告处理入口（MinerUReportMerger）
+
+```python
+class MinerUReportMerger:
+    def __init__(self)
+    
+    def process_reports(
+        self,
+        reports_dir: Path = None,
+        reports_paths: List[Path] = None,
+        output_dir: Path = None,
+        subset_csv: Path = None,
+    ) -> List[Dict]
+```
 
 **输入**：
 - 报告来源：目录路径（自动收集 `*.json`）或文件路径列表
@@ -136,7 +149,7 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 5. **元信息填充**（MinerU 格式）：
    - 通过解析后的主名在 subset.csv 映射表中查找元数据
    - 组装 `metainfo`，包含：sha1_name、sha1、company_name、file_name、pages_amount、text_blocks_amount、tables_amount、pictures_amount、equations_amount、footnotes_amount
-6. **页面文本规整**：调用文本规整组件处理 content 内容，生成按页组织的清洗后文本
+6. **页面文本规整**：调用 `PageTextPreparation.process_report` 处理 content 内容，生成按页组织的清洗后文本
 7. **结果组装**：每条报告输出为 `{metainfo, content}` 结构
 8. **可选持久化**：若指定输出目录，自动创建目录，按规则生成文件名并写入 JSON
 
@@ -183,11 +196,116 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 
 ---
 
-## 5. 测试要点
+## 5. 页面文本规整（PageTextPreparation）
+
+```python
+class PageTextPreparation:
+    def __init__(self, use_serialized_tables: bool = False, serialized_tables_instead_of_markdown: bool = False)
+    
+    def process_reports(self, reports_dir: Path = None, reports_paths: List[Path] = None, output_dir: Path = None) -> List[Dict]
+    
+    def process_report(self, report_data: dict) -> dict
+    
+    def prepare_page_text(self, page_number: int) -> str
+    
+    def export_to_markdown(self, reports_dir: Path, output_dir: Path)
+```
+
+### 5.1 __init__
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `use_serialized_tables` | `bool` | `False` | 是否使用序列化表格替代 Markdown 表格 |
+| `serialized_tables_instead_of_markdown` | `bool` | `False` | `True` 时完全用序列化文本替代；`False` 时拼接 Markdown + 序列化描述 |
+
+### 5.2 process_report
+
+处理单份报告，返回规整后的每页文本结构：
+
+```json
+{
+  "chunks": null,
+  "pages": [
+    {"page": 1, "text": "..."},
+    {"page": 2, "text": "..."}
+  ]
+}
+```
+
+处理步骤：
+1. 逐页调用 `prepare_page_text(page_number)`
+2. 调用 `_clean_text(page_text)` 用正则清洗文本（替换 slash command、glyph、cap 等）
+3. 若存在修正，打印修正数量与详情
+
+### 5.3 prepare_page_text
+
+主流程：处理页面块并组装为字符串。
+
+1. 根据页码获取页面数据
+2. `_filter_blocks`：移除 `page_footer`、`picture` 类型块
+3. `_apply_formatting_rules`：按规则处理块，合并表格组、列表组、脚注等
+4. 首尾块去除多余空白，行拼接为字符串
+
+### 5.4 _apply_formatting_rules
+
+核心格式化逻辑，按块类型分组处理：
+
+| 块类型 | 处理行为 |
+|--------|----------|
+| `page_header` | 前 3 个块用 `# `，其余用 `## ` |
+| `section_header` | 同 page_header 规则 |
+| `paragraph` | 若不以冒号结尾或下一块不是 table/list_item，包装为 `### ` |
+| `table` | 触发表格组渲染（含前置冒号标题、脚注） |
+| `list_item` | 触发列表组渲染（含前置冒号标题、脚注） |
+| `text` / `caption` / `footnote` / `checkbox_*` / `formula` | 直接追加文本 |
+
+**表格组渲染**（`_render_table_group`）：
+- 标题/说明文本前置
+- 表格内容通过 `_get_table_by_id(table_id)` 获取
+- 若启用 `use_serialized_tables`，调用 `_get_serialized_table_text` 获取序列化描述
+- 脚注追加
+
+**列表组渲染**（`_render_list_group`）：
+- 标题/说明文本前置
+- `list_item` 转为 `- ` 前缀
+- `checkbox_selected` 转为 `[x] `， `checkbox_unselected` 转为 `[ ] `
+- 脚注追加
+
+### 5.5 _get_serialized_table_text
+
+```python
+def _get_serialized_table_text(self, table: dict, serialized_tables_instead_of_markdown: bool) -> str
+```
+
+- 若 `table` 无 `serialized` 字段，回退 `table.get("markdown", "")`
+- 若 `serialized_tables_instead_of_markdown=True`，返回纯序列化文本（`information_blocks` 拼接）
+- 若 `serialized_tables_instead_of_markdown=False`，返回 `markdown + "\nDescription of the table entities:\n" + serialized_text`
+
+### 5.6 _clean_text
+
+用正则清洗文本，统计修正次数：
+
+| 模式 | 示例 | 替换 |
+|------|------|------|
+| `/zero.pl.tnum` 等 slash command | `/zero.pl.tnum` | `0` |
+| `glyph<...>` | `glyph<0x0041>` | 空字符串 |
+| `/A.cap` | `/A.cap` | `A` |
+
+完整 command_mapping 包含：`zero`~`nine`, `period`, `comma`, `colon`, `hyphen`, `percent`, `dollar`, `space`, `plus`, `minus`, `slash`, `asterisk`, `lparen`, `rparen`, `parenleft`, `parenright`, `wedge.1_E`
+
+### 5.7 export_to_markdown
+
+将处理后的报告导出为 Markdown 文件：
+- 每页之间用 `\n\n---\n\n# Page N\n\n` 分隔
+- 输出文件名为 `{sha1_name}.md`
+
+---
+
+## 6. 测试要点
 
 > 以下测试场景按 TDD 流程单独列出，spec 中不绑定具体方法名。
 
-### 5.1 批量处理基础场景
+### 6.1 批量处理基础场景
 
 | # | 测试场景 | 预期行为 |
 |---|---------|---------|
@@ -197,7 +315,7 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 | T4 | 传入单个已规整格式 JSON 文件 | 跳过转换，直接规整后返回 |
 | T5 | 混合传入 MinerU 格式和已规整格式 | 分别正确处理，返回合并列表 |
 
-### 5.2 格式转换与内容映射
+### 6.2 格式转换与内容映射
 
 | # | 测试场景 | 预期行为 |
 |---|---------|---------|
@@ -212,7 +330,7 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 | T14 | 多页报告 | 按 page_idx 升序处理，每页内容独立 |
 | T15 | 页面含空 text span 或缺失 content | 忽略空内容，不生成对应块 |
 
-### 5.3 元信息解析与填充
+### 6.3 元信息解析与填充
 
 | # | 测试场景 | 预期行为 |
 |---|---------|---------|
@@ -226,7 +344,7 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 | T23 | metainfo 中 file_name 为空但 sha1_name 非空 | 输出文件名为 sha1_name + `.json` |
 | T24 | metainfo 中 file_name 和 sha1_name 均为空 | 输出文件名为解析的报告主名 + `.json` |
 
-### 5.4 统计与边界
+### 6.4 统计与边界
 
 | # | 测试场景 | 预期行为 |
 |---|---------|---------|
@@ -237,9 +355,20 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 | T29 | 输出目录已存在 | 不报错，正常写入 |
 | T30 | 输出目录不存在 | 自动递归创建 |
 
+### 6.5 页面文本规整
+
+| # | 测试场景 | 预期行为 |
+|---|---------|---------|
+| T31 | 页面含 page_footer | 被过滤，不出现在最终文本 |
+| T32 | 页面含 picture | 被过滤，不出现在最终文本 |
+| T33 | 表格前有冒号结尾的 paragraph | 表格组包含该 paragraph 作为标题 |
+| T34 | 列表前有冒号结尾的 paragraph | 列表组包含该 paragraph 作为标题 |
+| T35 | 文本含 slash command | `_clean_text` 正确替换并统计修正次数 |
+| T36 | 启用 use_serialized_tables | `_get_table_by_id` 返回序列化文本而非纯 Markdown |
+
 ---
 
-## 6. 异常与边界行为
+## 7. 异常与边界行为
 
 | 场景 | 行为 |
 |------|------|
@@ -251,7 +380,7 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 
 ---
 
-## 7. 当前实现缺陷（需后续优化）
+## 8. 当前实现缺陷（需后续优化）
 
 1. **picture_id 硬编码**：所有图片块的 `picture_id` 固定为 0，无法区分多图
 2. **equations_amount / footnotes_amount 恒为 0**：MinerU 转换流程未统计公式和脚注
@@ -260,11 +389,13 @@ CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
 5. **递归无深度限制**：list 块的嵌套递归在极端情况下可能导致栈溢出
 6. **page_size 回退值硬编码**：默认 595×841 未参数化
 7. **输出文件名冲突**：不同来源报告若解析出相同主名，后者会覆盖前者
+8. **PageTextPreparation 类名与文件路径不一致**：定义在 `parsed_reports_merging.py` 中，而非 `markdown_reports_merging.py`
 
 ---
 
-## 8. 版本记录
+## 9. 版本记录
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v1.0 | 2024-XX-XX | 初始实现，支持 MinerU JSON 批量转换为规整报告结构 |
+| v1.1 | 2026-06-11 | 补充 PageTextPreparation 详细接口（序列化表格、export_to_markdown、_clean_text 等） |

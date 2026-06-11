@@ -1,8 +1,14 @@
 # Retrieval Module Spec
 
+> **同步声明**：本文档严格反向推导自 `src/retrieval.py`、`src/reranking.py` 与 `src/post_retrieval_correction.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
+
+---
+
 ## 1. 概述
 
 `retrieval.py` 是文档检索系统的核心模块，提供三种检索策略：**BM25 稀疏检索**、**向量密集检索** 和 **混合检索（向量 + LLM 重排）**。模块面向企业报告场景，按 `company_name` 定位目标文档，在文档分块（chunks）或页面（pages）层级上进行相关性检索。
+
+`post_retrieval_correction.py` 提供检索后文档相关性评分（RetrievalGrader），用于后处理验证。
 
 ---
 
@@ -15,6 +21,7 @@
 | 多 Embedding 源 | 支持 OpenAI (`text-embedding-3-large`) 和 DashScope (`text-embedding-v1`) |
 | LLM 重排融合 | 混合检索结合向量相似度与 LLM 相关性评分，加权融合后重排序 |
 | 灵活返回粒度 | 支持返回 `chunks`（分块）或 `parent_pages`（完整页面） |
+| 检索后验证 | 支持对检索结果进行 LLM 二元相关性评分 |
 
 ---
 
@@ -29,11 +36,18 @@
          ▼                       ▼                       ▼
     BM25Okapi 索引          FAISS 向量库            VectorRetriever
     + 分块 JSON             + 分块 JSON             + LLMReranker
+                                                          │
+                                                          ▼
+                                              ┌─────────────────────┐
+                                              │   RetrievalGrader   │
+                                              │  (检索后相关性评分)   │
+                                              └─────────────────────┘
 ```
 
 - **BM25Retriever**：基于 `rank_bm25` 构建，适合关键词匹配场景。
 - **VectorRetriever**：基于 `faiss` 向量库，支持语义相似度检索。
 - **HybridRetriever**：组合 `VectorRetriever` 与 `LLMReranker`，先向量召回、再 LLM 重排，返回加权融合后的 Top-N 结果。
+- **RetrievalGrader**：基于 LLM 对单篇文档与问题的相关性进行二元评分（yes/no）。
 
 ---
 
@@ -53,6 +67,7 @@ python-dotenv
 **内部依赖**：
 - `src.reranking.LLMReranker`：用于 HybridRetriever 的重排阶段
 - `src.prompts`：LLMReranker 使用的 system prompt 和结构化 schema
+- `src.api_requests.APIProcessor`：RetrievalGrader 使用的 LLM 调用封装
 
 ---
 
@@ -60,7 +75,7 @@ python-dotenv
 
 | 变量名 | 用途 | 使用方 |
 |--------|------|--------|
-| `OPENAI_API_KEY` | OpenAI Embedding / LLM 鉴权 | VectorRetriever, LLMReranker |
+| `OPENAI_API_KEY` | OpenAI Embedding / LLM 鉴权 | VectorRetriever, LLMReranker, RetrievalGrader |
 | `OPENAI_API_BASE` | OpenAI 自定义 Base URL（可选） | LLMReranker |
 | `DASHSCOPE_API_KEY` | 阿里云 DashScope 鉴权 | VectorRetriever, LLMReranker |
 | `JINA_API_KEY` | Jina Reranker API 鉴权 | JinaReranker（本模块未直接使用） |
@@ -171,6 +186,11 @@ class VectorRetriever:
 | `embedding_provider` | `str` | `"dashscope"` | `"openai"` 或 `"dashscope"` |
 | `top_n` | `int` | `3` | 返回最近邻数量 |
 
+**`_get_embedding` 实现细节**：
+- OpenAI 模式：调用 `self.llm.embeddings.create(input=text, model="text-embedding-3-large")`
+- DashScope 模式：调用 `dashscope.TextEmbedding.call(model="text-embedding-v1", input=[text])`
+- 兼容 DashScope 单条/多条返回格式，空 embedding 时抛 `RuntimeError`
+
 **`retrieve_by_company_name` 返回结构**：
 ```python
 [
@@ -218,6 +238,13 @@ combined_score = llm_weight * relevance_score + vector_weight * distance
 
 > 注意：当前 `distance` 为 FAISS L2 距离，数值越小表示越相似。若需与 `relevance_score`（越大越好）同向，后续可考虑对 `distance` 做归一化或取倒数。
 
+**计时输出**：方法内部使用 `time.time()` 打印各阶段耗时：
+- `[计时] [HybridRetriever] 开始向量检索 ...`
+- `[计时] [HybridRetriever] 向量检索耗时: X.XX 秒`
+- `[计时] [HybridRetriever] 开始LLM重排 ...`
+- `[计时] [HybridRetriever] LLM重排耗时: X.XX 秒`
+- `[计时] [HybridRetriever] 总耗时: X.XX 秒`
+
 **返回结构**：
 ```python
 [
@@ -233,13 +260,17 @@ combined_score = llm_weight * relevance_score + vector_weight * distance
 
 ---
 
-## 8. LLM 重排器（依赖模块）
+## 8. LLM 重排器（src.reranking）
 
-`HybridRetriever` 内部委托 `src.reranking.LLMReranker` 执行重排。
+### 8.1 LLMReranker
 
 ```python
 class LLMReranker:
     def __init__(self, provider: str = "openai")
+    
+    def get_rank_for_single_block(self, query: str, retrieved_document: str) -> dict
+    
+    def get_rank_for_multiple_blocks(self, query: str, retrieved_documents: list) -> dict
     
     def rerank_documents(
         self,
@@ -254,11 +285,61 @@ class LLMReranker:
 - 默认 `max_workers=1` 串行调用，避免 DashScope QPS 超限。
 - 单条模式使用 `gpt-4o-mini-2024-07-18` / `qwen-turbo` + 结构化输出 (`response_format`)。
 
+**OpenAI 单条模式**：
+- 调用 `self.llm.beta.chat.completions.parse`，返回 `{"relevance_score": float, "reasoning": str}`
+
+**DashScope 单条模式**：
+- 调用 `dashscope.Generation.call`，返回 `{"relevance_score": 0.0, "reasoning": content}`（未结构化解析）
+
+**OpenAI 批量模式**：
+- 调用 `self.llm.beta.chat.completions.parse`，返回 `{"block_rankings": [{"relevance_score": float, "reasoning": str}, ...]}`
+
+**DashScope 批量模式**：
+- 调用 `dashscope.Generation.call`，返回 `{"block_rankings": [{"relevance_score": 0.0, "reasoning": content}, ...]}`（未结构化解析）
+
 ---
 
-## 9. 使用示例
+## 9. 检索后评分器（src.post_retrieval_correction）
 
-### 9.1 BM25 检索
+### 9.1 RetrievalGrader
+
+```python
+class RetrievalGrader:
+    def __init__(self, provider: str = "openai")
+    
+    def grade(self, question: str, document: str) -> GradeDocuments
+    
+    def invoke(self, inputs: dict) -> GradeDocuments
+```
+
+**GradeDocuments 结构**：
+```python
+class GradeDocuments(BaseModel):
+    binary_score: str  # "yes" 表示相关，"no" 表示不相关
+```
+
+**System Prompt**：
+```
+你是一个评估检索到的文档与用户问题相关性的评分员。
+如果文档包含与问题相关的关键词或语义，则将其评为相关。
+给出一个二元评分'yes'或'no'来表示文档是否与问题相关。
+```
+
+**边界行为**：
+- 调用 `APIProcessor.send_message` 进行结构化输出，返回 `GradeDocuments` 实例
+- `invoke` 方法兼容 LangChain / LangGraph Runnable 接口，要求 `inputs` 包含 `"question"` 和 `"document"` 键
+
+### 9.2 默认实例
+
+```python
+retrieval_grader = RetrievalGrader()
+```
+
+---
+
+## 10. 使用示例
+
+### 10.1 BM25 检索
 
 ```python
 from pathlib import Path
@@ -276,7 +357,7 @@ results = retriever.retrieve_by_company_name(
 )
 ```
 
-### 9.2 向量检索
+### 10.2 向量检索
 
 ```python
 from src.retrieval import VectorRetriever
@@ -294,7 +375,7 @@ results = retriever.retrieve_by_company_name(
 )
 ```
 
-### 9.3 混合检索
+### 10.3 混合检索
 
 ```python
 from src.retrieval import HybridRetriever
@@ -314,9 +395,22 @@ results = retriever.retrieve_by_company_name(
 )
 ```
 
+### 10.4 检索后评分
+
+```python
+from src.post_retrieval_correction import RetrievalGrader
+
+grader = RetrievalGrader(provider="openai")
+result = grader.grade(
+    question="公司营收增长原因",
+    document="2024年公司营业收入同比增长15%，主要得益于..."
+)
+print(result.binary_score)  # "yes" 或 "no"
+```
+
 ---
 
-## 10. 性能与限制
+## 11. 性能与限制
 
 | 项目 | 说明 |
 |------|------|
@@ -324,11 +418,13 @@ results = retriever.retrieve_by_company_name(
 | 并发控制 | `LLMReranker` 固定 `max_workers=1`，避免第三方 API QPS 限制 |
 | 向量距离 | 当前使用 FAISS L2 距离，未做归一化；与 LLM 分数融合时方向需注意 |
 | 异常处理 | 文档缺失、索引缺失、Embedding 为空时均会抛出异常或记录警告日志 |
+| DashScope 重排 | DashScope 模式下返回的 relevance_score 固定为 0.0，实际未做结构化解析 |
 
 ---
 
-## 11. 版本记录
+## 12. 版本记录
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v1.0 | 2024-XX-XX | 初始版本，支持 BM25 / Vector / Hybrid 三种检索模式 |
+| v1.1 | 2026-06-11 | 新增 RetrievalGrader 描述；补充 HybridRetriever 计时输出、VectorRetriever 返回类型修正、DashScope 重排限制说明 |

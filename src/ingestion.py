@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from src.openai_embedding import OpenAIEmbedder, default_embedder
+from src.config import settings
 from tenacity import retry, wait_fixed, stop_after_attempt
 
 # BM25Ingestor：BM25索引构建与保存工具
@@ -89,7 +90,7 @@ class VectorDBIngestor:
             embedder = OpenAIEmbedder(model=model)
         return embedder.get_embeddings(text_chunks)
 
-    def _build_docs(self, report: dict) -> List[Document]:
+    def _build_docs(self, report: dict, index_name: str = "default") -> List[Document]:
         """针对单份报告，提取文本块并构建 Document 列表。"""
         chunks = report.get("content", {}).get("chunks", [])
         metainfo = report.get("metainfo", {})
@@ -116,14 +117,31 @@ class VectorDBIngestor:
                         "company_name": metainfo.get("company_name", ""),
                         "file_name": metainfo.get("file_name", ""),
                         "pages_amount": metainfo.get("pages_amount", 0),
+                        "index_name": index_name,
                     }
                 )
             )
 
         return docs
 
-    def process_reports(self, all_reports_dir: Path, output_dir: Path):
-        """批量处理所有报告，生成并保存 ChromaDB 向量库。"""
+    def process_reports(
+        self,
+        all_reports_dir: Path,
+        output_dir: Path | None = None,
+        index_name: str | None = None,
+    ):
+        """批量处理所有报告，生成并保存 ChromaDB 向量库。
+
+        Args:
+            all_reports_dir: 存放 JSON 报告的目录。
+            output_dir: ChromaDB 持久化目录；为空时取 .env 中的 CHROMA_PERSIST_DIR。
+            index_name: 索引标识，写入 metadata；为空时默认为 "default"。
+        """
+        if output_dir is None:
+            output_dir = Path(settings.chroma_persist_dir)
+        if index_name is None:
+            index_name = "default"
+
         all_report_paths = list(all_reports_dir.glob("*.json"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -134,7 +152,7 @@ class VectorDBIngestor:
             with open(report_path, 'r', encoding='utf-8') as f:
                 report_data = json.load(f)
 
-            docs = self._build_docs(report_data)
+            docs = self._build_docs(report_data, index_name=index_name)
             if not docs:
                 continue
 
@@ -143,6 +161,7 @@ class VectorDBIngestor:
                     documents=docs,
                     embedding=self.embedder.client,
                     persist_directory=str(output_dir),
+                    collection_name=index_name,
                 )
             else:
                 vectorstore.add_documents(docs)
@@ -158,8 +177,7 @@ if __name__ == "__main__":
 
     # 默认路径与 PipelineConfig 保持一致
     input_dir = root / "data" / "stock_data" / "databases" / "chunked_reports"
-    output_dir = root / "data" / "stock_data" / "databases" / "vector_dbs"
 
     vdb_ingestor = VectorDBIngestor()
-    vdb_ingestor.process_reports(input_dir, output_dir)
-    print(f"Vector databases created in {output_dir}")
+    vdb_ingestor.process_reports(input_dir)
+    print(f"Vector databases created in {settings.chroma_persist_dir}")

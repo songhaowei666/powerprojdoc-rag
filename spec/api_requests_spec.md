@@ -1,6 +1,6 @@
 # API Requests Module Spec
 
-> **同步声明**：本文档严格反向推导自 `src/api_requests.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
+> **同步声明**：本文档严格反向推导自 `src/api_requests.py` 与 `src/api_request_parallel_processor.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
 
 ---
 
@@ -34,7 +34,7 @@
 ┌─────────────────┐ ┌──────────────┐ ┌─────────────────┐ ┌─────────────────┐
 │ BaseOpenai      │ │ BaseIBMAPI   │ │ BaseGemini      │ │ BaseDashscope   │
 │ Processor       │ │ Processor    │ │ Processor       │ │ Processor       │
-│ (OpenAI)        │ │ (IBM RAG)    │ │ (Google Gemini) │ │ (DashScope)     │
+│ (LangChain)     │ │ (IBM RAG)    │ │ (Google Gemini) │ │ (DashScope)     │
 └─────────────────┘ └──────────────┘ └─────────────────┘ └─────────────────┘
                                                           
 ┌─────────────────────────────────────────────────────────────┐
@@ -44,9 +44,9 @@
 ```
 
 - **`APIProcessor`**：对外统一入口，根据 `provider` 参数自动实例化底层处理器。
-- **`BaseOpenaiProcessor`**：封装 OpenAI 官方 SDK，支持 `chat.completions.create` 与 `beta.chat.completions.parse`（结构化输出）。
+- **`BaseOpenaiProcessor`**：封装 LangChain `ChatOpenAI`，支持 `invoke` 与 `with_structured_output`（结构化输出）。配置来自 `src.config.settings`。
 - **`BaseIBMAPIProcessor`**：基于 `requests` 直接调用 IBM 私有 REST API，额外支持余额查询、模型列表、Embedding。
-- **`BaseGeminiProcessor`**：基于 `google.generativeai`，内置重试机制（3 次，间隔 20 秒）。
+- **`BaseGeminiProcessor`**：基于 `google.generativeai`（当前代码中 import 被注释，实际可能不可用），内置重试机制（3 次，间隔 20 秒）。
 - **`BaseDashscopeProcessor`**：基于 `dashscope.Generation.call`，面向阿里云通义千问系列。
 - **`AsyncOpenaiProcessor`**：基于 `api_request_parallel_processor`，将批量请求写入 JSONL 后并行消费。
 
@@ -56,34 +56,38 @@
 
 ```
 python >= 3.10
+langchain-openai
+langchain-core
 openai
 requests
-google-generativeai
+google-generativeai  # 当前代码中 import 被注释
 dashscope
 tiktoken
 pydantic
 tenacity
 json_repair
-python-dotenv
+pydantic-settings
 ```
 
 **内部依赖**：
 - `src.api_request_parallel_processor`：`AsyncOpenaiProcessor` 使用的并行请求处理器
 - `src.prompts`：RAG 场景的 system prompt、user prompt、结构化 Schema 定义
+- `src.config.settings`：`BaseOpenaiProcessor` 读取 API 密钥与模型配置
 
 ---
 
-## 5. 环境变量
+## 5. 环境变量 / 配置
 
 | 变量名 | 用途 | 使用方 |
 |--------|------|--------|
-| `OPENAI_API_KEY` | OpenAI 鉴权 | `BaseOpenaiProcessor`, `AsyncOpenaiProcessor` |
-| `OPENAI_API_BASE` | OpenAI 自定义 Base URL（可选） | `BaseOpenaiProcessor`, `AsyncOpenaiProcessor` |
+| `OPENAI_API_KEY` | OpenAI 鉴权 | `BaseOpenaiProcessor`, `AsyncOpenaiProcessor`（通过 `settings`） |
+| `OPENAI_API_BASE` | OpenAI 自定义 Base URL（可选） | `BaseOpenaiProcessor`, `AsyncOpenaiProcessor`（通过 `settings`） |
+| `CHAT_MODEL` | 默认对话模型 | `BaseOpenaiProcessor`, `APIProcessor`（通过 `settings.chat_model`） |
 | `IBM_API_KEY` | IBM API 鉴权 | `BaseIBMAPIProcessor` |
 | `GEMINI_API_KEY` | Google Gemini 鉴权 | `BaseGeminiProcessor` |
 | `DASHSCOPE_API_KEY` | 阿里云 DashScope 鉴权 | `BaseDashscopeProcessor` |
 
-> 所有环境变量均通过 `load_dotenv()` 在 `__init__` 时读取，未设置时后续 API 调用会失败。
+> OpenAI 相关配置通过 `src.config.settings`（pydantic-settings）读取，不再直接调用 `load_dotenv()`。
 
 ---
 
@@ -112,17 +116,19 @@ class BaseOpenaiProcessor:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `model` | `str` | `gpt-4o-2024-08-06` | 模型 ID |
-| `temperature` | `float` | `0.5` | 采样温度；**若为 `o3-mini` 则不会传入**（该模型不支持） |
-| `seed` | `int` | `None` | 确定性输出种子 |
+| `model` | `str` | `settings.chat_model` | 模型 ID |
+| `temperature` | `float` | `0.5` | 采样温度；**当前代码固定传入 `ChatOpenAI`** |
+| `seed` | `int` | `None` | 兼容性参数，当前未实际使用 |
 | `system_content` | `str` | 默认提示 | system 角色内容 |
 | `human_content` | `str` | `"Hello!"` | user 角色内容 |
 | `is_structured` | `bool` | `False` | 是否启用结构化输出 |
 | `response_format` | `Type[BaseModel]` | `None` | Pydantic Schema，仅在 `is_structured=True` 时生效 |
 
-**返回值**：
-- `is_structured=False`：返回模型生成的文本字符串
-- `is_structured=True`：返回 `response_format.model_dump()` 后的字典
+**实现细节**：
+- `__init__` 从 `src.config.settings` 读取 `chat_model`, `openai_api_key`, `openai_api_base`，初始化 `ChatOpenAI(model=..., api_key=..., base_url=..., timeout=5, max_retries=2, temperature=0.5)`
+- 非结构化输出：调用 `llm.invoke([SystemMessage, HumanMessage])`，返回 `response.content`
+- 结构化输出：调用 `llm.with_structured_output(response_format).invoke(...)`，返回 `response.model_dump()`
+- `self.response_data` 记录 `model`, `input_tokens`, `output_tokens`（结构化输出时 usage 为空字典）
 
 **Token 统计**：
 - 使用 `tiktoken` 的 `o200k_base` 编码器统计字符串 token 数。
@@ -204,6 +210,8 @@ class BaseGeminiProcessor:
 |------|------|--------|------|
 | `model` | `str` | `gemini-2.0-flash-001` | Gemini 模型 ID |
 | `seed` | `int` | `12345` | 兼容性参数，当前未实际使用 |
+
+> **注意**：当前代码中 `import google.generativeai as genai` 被注释，但 `_set_up_llm` 仍调用 `genai.configure`，运行时可能抛出 `NameError`。
 
 **重试策略**：
 ```python
@@ -289,7 +297,7 @@ class APIProcessor:
 
 #### 6.5.1 send_message
 
-统一路由方法，所有参数透传至底层处理器的 `send_message`。
+统一路由方法。特别地，当 `model=None` 时，从 `settings.chat_model` 读取默认模型，再透传至底层处理器。
 
 #### 6.5.2 get_answer_from_rag_context
 
@@ -370,12 +378,13 @@ class AsyncOpenaiProcessor:
 
 | 场景 | 行为 |
 |------|------|
-| OpenAI：`o3-mini` 模型传入 `temperature` | 参数被自动剔除，避免 API 报错 |
-| OpenAI：结构化输出 Schema 不匹配 | 由 OpenAI SDK 在服务端校验，失败时抛出 API 异常 |
+| OpenAI：结构化输出 Schema 不匹配 | 由 LangChain / OpenAI SDK 在服务端校验，失败时抛出 API 异常 |
+| OpenAI：`model=None` | 从 `settings.chat_model` 读取默认值 |
 | IBM：结构化输出 JSON 解析失败 | 自动调用 `_reparse_response` 重试一次；仍失败则返回原始字符串 |
 | IBM：API 返回 HTTP 错误 | 打印错误日志，返回 `None` |
 | Gemini：API 调用失败 | 触发 tenacity 重试，3 次后抛出 `Exception` |
 | Gemini：JSON 修复失败 | 与 IBM 类似，自动重解析一次 |
+| Gemini：`google.generativeai` 未导入 | 因 import 被注释，初始化时抛出 `NameError` |
 | DashScope：返回非 JSON 字符串 | 自动返回兜底字典，不会抛异常 |
 | DashScope：`DASHSCOPE_API_KEY` 未设置 | `dashscope.api_key = None`，后续调用由 SDK 抛错 |
 | AsyncOpenai：`queries` 为空 | 生成空 JSONL，处理结果为空列表 |
@@ -396,6 +405,9 @@ class AsyncOpenaiProcessor:
    - 各处理器的默认模型
 7. **Gemini 的 `seed` 参数未实际使用**：仅作兼容性占位
 8. **异常处理不一致**：OpenAI 直接抛 SDK 异常；IBM 捕获后打印并返回 `None`；Gemini 重试后抛异常；DashScope 几乎不抛异常
+9. **BaseOpenaiProcessor 的 temperature 未动态调整**：代码中 `o3-mini` 剔除 temperature 的逻辑被注释，当前固定传入
+10. **Gemini import 被注释**：`google.generativeai` 导入被注释，但类实现仍依赖 `genai`，导致运行时不可用
+11. **代码末尾的 `MetadataFilterResponse2`**：未在任何地方使用，属于残留代码
 
 ---
 
@@ -494,3 +506,4 @@ embeddings = ibm.get_embeddings(
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v1.0 | 2024-XX-XX | 初始实现，支持 OpenAI / IBM / Gemini / DashScope 四家 LLM 提供商统一接入 |
+| v1.1 | 2026-06-11 | BaseOpenaiProcessor 迁移至 LangChain ChatOpenAI；配置来源改为 `src.config.settings`；同步当前代码状态 |

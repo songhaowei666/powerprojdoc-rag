@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # --- IBM (代码中使用，.env 中可补充) ---
     ibm_api_key: str = ""
 
+    # --- ChromaDB 向量库持久化目录 ---
+    chroma_persist_dir: str = "data/stock_data/databases/vector_dbs"
+
 
 # 全局单例，导入即用
 settings = Settings()

@@ -15,7 +15,7 @@ class GraphState(TypedDict):
        documents:List[str]
 
 from langchain.schema import Document
-from src.post_retrieval_correction import RetrievalGrader, retrieval_grader
+from src.post_retrieval_correction import Retr ievalGrader, retrieval_grader
 def retrieve(state):
        """
        检索与问题相关的文档
