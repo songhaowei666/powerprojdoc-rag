@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from copy import deepcopy
 from tenacity import retry, stop_after_attempt, wait_fixed
 import dashscope
-from config  import settings
+from src.config import settings
 
 # OpenAI基础处理器，使用 LangChain 技术栈封装消息发送、结构化输出、计费等逻辑
 class BaseOpenaiProcessor:
@@ -421,8 +421,7 @@ class APIProcessor:
         The underlying processor's send_message method is responsible for handling the parameters.
         """
         if model is None:
-            from config import settings
-            model = settings.chat_model
+            model = self.processor.default_model
         return self.processor.send_message(
             model=model,
             temperature=temperature,
