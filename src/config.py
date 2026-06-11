@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     # --- ChromaDB 向量库持久化目录 ---
     chroma_persist_dir: str = "data/stock_data/databases/vector_dbs"
 
+    # --- BM25 索引输出目录 ---
+    bm25_output_dir: str = "data/stock_data/databases/bm25_index"
+
+    # --- 报告 JSON 输入目录 ---
+    reports_input_dir: str = "data/stock_data/databases/chunked_reports"
+
+    # --- Pipeline 子目录名 ---
+    vector_db_subdir: str = "vector_dbs"
+    chunked_reports_subdir: str = "chunked_reports"
+    bm25_dbs_subdir: str = "bm25_dbs"
+
 
 # 全局单例，导入即用
 settings = Settings()

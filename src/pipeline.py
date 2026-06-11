@@ -1,13 +1,16 @@
 # Qwen-Turbo API的基础限流设置为每分钟不超过500次API调用（QPM）。同时，Token消耗限流为每分钟不超过500,000 Tokens
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from pyprojroot import here
 import logging
 import os
 import json
 import pandas as pd
 import shutil
 import time
+
+# 将项目根目录加入 sys.path，支持直接运行本文件
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.pdf_parsing import PDFParser
 from src import pdf_mineru
@@ -16,6 +19,7 @@ from src.text_splitter import TextSplitter
 from src.ingestion import VectorDBIngestor
 from src.ingestion import BM25Ingestor
 from src.questions_processing import QuestionsProcessor
+from src.config import settings
 from src.tables_serialization import TableSerializer
 
 @dataclass
@@ -33,9 +37,9 @@ class PipelineConfig:
         self.debug_data_path = root_path / "debug_data"
         self.databases_path = root_path / f"databases{suffix}"
         
-        self.vector_db_dir = self.databases_path / "vector_dbs"
-        self.documents_dir = self.databases_path / "chunked_reports"
-        self.bm25_db_path = self.databases_path / "bm25_dbs"
+        self.vector_db_dir = self.databases_path / settings.vector_db_subdir
+        self.documents_dir = self.databases_path / settings.chunked_reports_subdir
+        self.bm25_db_path = self.databases_path / settings.bm25_dbs_subdir
 
         # self.parsed_reports_dirname = "01_parsed_reports"
         # self.parsed_reports_debug_dirname = "01_parsed_reports_debug"
@@ -357,7 +361,7 @@ if __name__ == "__main__":
 
     # 5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports
     # print('5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports')
-    pipeline.chunk_reports2() 
+    # pipeline.chunk_reports2() 
     
     # 6. 从分块报告创建向量数据库，输出到 databases/vector_dbs
     print('6. 从分块报告创建向量数据库，输出到 databases/vector_dbs')
@@ -365,7 +369,7 @@ if __name__ == "__main__":
     
     # 7. 处理问题并生成答案，具体逻辑取决于 run_config
     # 默认questions.json
-    print('7. 处理问题并生成答案，具体逻辑取决于 run_config')
-    pipeline.process_questions() 
+    # print('7. 处理问题并生成答案，具体逻辑取决于 run_config')
+    # pipeline.process_questions() 
     
     print('完成')

@@ -92,8 +92,8 @@ class TestBM25Ingestor:
         ingestor = BM25Ingestor()
         ingestor.process_reports(reports_dir, output_dir)
 
-        # Verify output file exists
-        expected_file = output_dir / f"{sample_report['metainfo']['sha1']}.pkl"
+        # Verify output file exists (default index_name = "default")
+        expected_file = output_dir / "default.pkl"
         assert expected_file.exists()
 
         # Verify it's a valid BM25Okapi pickle
@@ -127,9 +127,12 @@ class TestBM25Ingestor:
 
         output_dir = tmp_path / "bm25_output"
         ingestor = BM25Ingestor()
-        ingestor.process_reports(reports_dir, output_dir)
+        ingestor.process_reports(reports_dir, output_dir, index_name="merged")
 
-        assert len(list(output_dir.glob("*.pkl"))) == 3
+        # All reports merged into a single index file
+        assert len(list(output_dir.glob("*.pkl"))) == 1
+        expected_file = output_dir / "merged.pkl"
+        assert expected_file.exists()
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,8 @@ pydantic-settings
 | `OPENAI_API_BASE` | OpenAI 自定义 Base URL（可选） | 通过 `src.config.settings` 读取 |
 | `EMBEDDING_MODEL` | 默认 Embedding 模型 | 通过 `src.config.settings` 读取，默认 `text-embedding-3-large` |
 | `CHROMA_PERSIST_DIR` | ChromaDB 持久化目录 | 通过 `src.config.settings` 读取，默认 `data/stock_data/databases/vector_dbs` |
+| `BM25_OUTPUT_DIR` | BM25 索引输出目录 | 通过 `src.config.settings` 读取，默认 `data/stock_data/databases/bm25_index` |
+| `REPORTS_INPUT_DIR` | 报告 JSON 输入目录 | 通过 `src.config.settings` 读取，默认 `data/stock_data/databases/chunked_reports` |
 
 > 注意：`VectorDBIngestor` 的 embedding 实现已改为 OpenAI，不再使用 DashScope。
 
@@ -83,7 +85,7 @@ class BM25Ingestor:
     
     def create_bm25_index(self, chunks: List[str]) -> BM25Okapi
     
-    def process_reports(self, all_reports_dir: Path, output_dir: Path)
+    def process_reports(self, all_reports_dir: Path | None = None, output_dir: Path | None = None, index_name: str = "default")
 ```
 
 ### 4.2 create_bm25_index
@@ -91,28 +93,26 @@ class BM25Ingestor:
 | 项 | 说明 |
 |----|------|
 | 输入 | `chunks: List[str]` — 纯文本字符串列表 |
-| 分词方式 | `chunk.split()` — 按任意空白符分割，不做中文分词 |
+| 分词方式 | `jieba.cut(chunk)` — 支持中文分词 |
 | 输出 | `BM25Okapi` 索引对象 |
 
 ### 4.3 process_reports
 
 批量处理目录下所有 `*.json` 报告：
 
-1. `output_dir.mkdir(parents=True, exist_ok=True)` — 自动创建输出目录
-2. 遍历 `all_reports_dir.glob("*.json")`，带 tqdm 进度条
-3. 每份报告：
-   - 读取 JSON
-   - 提取 `content.chunks` 中的 `text` 字段
-   - 调用 `create_bm25_index` 构建索引
-   - 保存为 `pickle`，文件名为 `{sha1}.pkl`
-4. 打印处理数量
+1. `all_reports_dir` 为空时，自动取 `settings.reports_input_dir`（`.env` 中的 `REPORTS_INPUT_DIR`，默认 `data/stock_data/databases/chunked_reports`）
+2. `output_dir` 为空时，自动取 `settings.bm25_output_dir`（`.env` 中的 `BM25_OUTPUT_DIR`，默认 `data/stock_data/databases/bm25_index`）
+3. `output_dir.mkdir(parents=True, exist_ok=True)` — 自动创建输出目录
+4. 遍历 `all_reports_dir.glob("*.json")`，带 tqdm 进度条
+5. 收集所有报告的 `content.chunks` 中的 `text` 字段
+6. 调用 `create_bm25_index` 构建合并索引
+7. 保存为 `pickle`，文件名为 `{index_name}.pkl`
+8. 打印处理数量
 
 **输出文件**：
 ```
 output_dir/
-├── {sha1_1}.pkl
-├── {sha1_2}.pkl
-└── ...
+└── {index_name}.pkl
 ```
 
 ---
@@ -123,26 +123,29 @@ output_dir/
 
 ```python
 class VectorDBIngestor:
-    def __init__(self)
+    def __init__(self, embedder)
     
-    def _get_embeddings(self, text: Union[str, List[str]], model: str = "text-embedding-3-large") -> List[List[float]]
+    def _get_embeddings(self, text: Union[str, List[str]]) -> List[List[float]]
     
     def _build_docs(self, report: dict, index_name: str = "default") -> List[Document]
     
-    def process_reports(self, all_reports_dir: Path, output_dir: Path | None = None, index_name: str | None = None)
+    def process_reports(self, all_reports_dir: Path | None = None, output_dir: Path | None = None, index_name: str | None = None)
 ```
 
 ### 5.2 __init__
 
-- 复用 `src.openai_embedding.default_embedder` 实例（`OpenAIEmbedder`）
-- 若后续调用 `_get_embeddings` 时指定了不同 model，会临时创建新 `OpenAIEmbedder` 实例
+```python
+def __init__(self, embedder)
+```
+
+- `embedder` 为必填参数，由调用方注入（通常为 `OpenAIEmbedder` 实例）
 
 ### 5.3 _get_embeddings
 
 **签名**：
 ```python
 @retry(wait=wait_fixed(20), stop=stop_after_attempt(2))
-def _get_embeddings(self, text, model="text-embedding-3-large")
+def _get_embeddings(self, text)
 ```
 
 **重试策略**：固定间隔 20 秒，最多 2 次尝试（含首次）。
@@ -155,9 +158,7 @@ def _get_embeddings(self, text, model="text-embedding-3-large")
 | 2 | 统一转为一维字符串列表 `text_chunks` | — |
 | 3 | 类型检查：所有元素必须为 `str` | `ValueError("所有待嵌入文本必须为字符串类型！...")` |
 | 4 | 过滤 `strip()` 后为空的字符串 | 若过滤后为空列表，抛 `ValueError("所有待嵌入文本均为空字符串！")` |
-| 5 | 调用 `OpenAIEmbedder.get_embeddings(text_chunks)` | — |
-
-> 注意：`model` 参数仅在指定了与默认不同的模型时生效，会临时创建新 `OpenAIEmbedder` 实例。
+| 5 | 调用 `self.embedder.get_embeddings(text_chunks)` | — |
 
 ### 5.4 _build_docs
 
@@ -177,17 +178,18 @@ def _get_embeddings(self, text, model="text-embedding-3-large")
 
 批量处理目录下所有 `*.json` 报告：
 
-1. `output_dir` 为空时，自动取 `settings.chroma_persist_dir`（`.env` 中的 `CHROMA_PERSIST_DIR`，默认 `data/stock_data/databases/vector_dbs`）
-2. `index_name` 为空时，默认值为 `"default"`，会传递给 `_build_docs` 写入 metadata
-3. `output_dir.mkdir(parents=True, exist_ok=True)`
-4. 遍历 `all_reports_dir.glob("*.json")`，带 tqdm 进度条
-5. 每份报告：
+1. `all_reports_dir` 为空时，自动取 `settings.reports_input_dir`（`.env` 中的 `REPORTS_INPUT_DIR`，默认 `data/stock_data/databases/chunked_reports`）
+2. `output_dir` 为空时，自动取 `settings.chroma_persist_dir`（`.env` 中的 `CHROMA_PERSIST_DIR`，默认 `data/stock_data/databases/vector_dbs`）
+3. `index_name` 为空时，默认值为 `"default"`，会传递给 `_build_docs` 写入 metadata
+4. `output_dir.mkdir(parents=True, exist_ok=True)`
+5. 遍历 `all_reports_dir.glob("*.json")`，带 tqdm 进度条
+6. 每份报告：
    - 读取 JSON
    - 调用 `_build_docs(report_data, index_name=index_name)` 构建 Document 列表
    - 若为空则跳过
    - 首次创建 `Chroma.from_documents(..., persist_directory=output_dir, collection_name=index_name)`
    - 后续调用 `vectorstore.add_documents(docs)`
-6. 打印处理数量
+7. 打印处理数量
 
 **输出文件**：
 ChromaDB 持久化目录结构（由 `persist_directory` 指定）。
@@ -214,7 +216,10 @@ class OpenAIEmbedder:
 
 | 场景 | 行为 |
 |------|------|
-| BM25: `all_reports_dir` 为空 | `glob` 返回空列表，输出 `"Processed 0 reports"` |
+| BM25: `all_reports_dir` 为空 | `glob` 返回空列表，输出 `"Processed 0 reports"`，不会创建 `.pkl` 文件 |
+| BM25: `all_reports_dir` 为空 | 自动回退到 `settings.reports_input_dir` |
+| BM25: `output_dir` 为空 | 自动回退到 `settings.bm25_output_dir` |
+| BM25: 所有报告 chunks 为空 | 不会创建 `.pkl` 文件 |
 | BM25: JSON 缺少 `content.chunks` | 代码未做防御，会抛 `KeyError` |
 | BM25: JSON 缺少 `metainfo.sha1` | 代码未做防御，会抛 `KeyError` |
 | Vector: `OPENAI_API_KEY` 未设置 | `settings.openai_api_key` 为空，API 调用时由 OpenAI SDK 抛错 |
@@ -222,6 +227,7 @@ class OpenAIEmbedder:
 | Vector: 所有文本过滤后为空 | `ValueError` |
 | Vector: JSON 缺少 `metainfo.sha1` | 代码未做防御，`_build_docs` 中 `sha1` 为空字符串 |
 | Vector: `content.chunks` 结构异常 | 会抛 `KeyError` 或 `TypeError`（未防御） |
+| Vector: `all_reports_dir` 为空 | 自动回退到 `settings.reports_input_dir` |
 | Vector: `output_dir` 为空 | 自动回退到 `settings.chroma_persist_dir` |
 | Vector: `index_name` 为空 | 自动回退到 `"default"` |
 
@@ -236,7 +242,7 @@ class OpenAIEmbedder:
 
 2. **截断逻辑不一致**：`_build_docs` 按字符数截断（2048 chars），而 `text_splitter.py` 按 token 数分块
 
-3. **BM25 分词缺陷**：`chunk.split()` 对中文效果极差（按字分词），应改用 jieba 或其他中文分词器
+3. ~~**BM25 分词缺陷**：`chunk.split()` 对中文效果极差（按字分词），应改用 jieba 或其他中文分词器~~（已修复：v1.3 引入 jieba 分词）
 
 4. **VectorDBIngestor 残留 DashScope 痕迹**：`ingestion.py` 文件头仍导入了 `dotenv`, `openai`（未实际使用），`BM25Ingestor` 代码整洁但 `VectorDBIngestor` 历史包袱较多
 
