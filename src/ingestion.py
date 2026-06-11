@@ -4,6 +4,7 @@ import pickle
 import sys
 from typing import List, Union
 from pathlib import Path
+from langchain_openai import OpenAIEmbeddings
 from tqdm import tqdm
 import hashlib
 import jieba
@@ -12,12 +13,14 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from rank_bm25 import BM25Okapi
 
+from src.openai_embedding import get_openai_embedding
+
 # 将项目根目录加入 sys.path，支持直接运行本文件
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from src.openai_embedding import default_embedder
+# from src.openai_embedding import default_embedder
 from src.config import settings
 from tenacity import retry, wait_fixed, stop_after_attempt
 
@@ -67,7 +70,7 @@ class BM25Ingestor:
 
 # VectorDBIngestor：向量库构建与保存工具
 class VectorDBIngestor:
-    def __init__(self, embedder):
+    def __init__(self, embedder:OpenAIEmbeddings):
         self.embedder = embedder
 
     @retry(wait=wait_fixed(20), stop=stop_after_attempt(2))
@@ -91,7 +94,7 @@ class VectorDBIngestor:
             raise ValueError("所有待嵌入文本均为空字符串！")
 
         print("start embedding ================================")
-        return self.embedder.get_embeddings(text_chunks)
+        return self.embedder.embed_documents(text_chunks)
 
     def _build_docs(self, report: dict, index_name: str = "default") -> List[Document]:
         """针对单份报告，提取文本块并构建 Document 列表。"""
@@ -164,7 +167,7 @@ class VectorDBIngestor:
             if vectorstore is None:
                 vectorstore = Chroma.from_documents(
                     documents=docs,
-                    embedding=self.embedder.client,
+                    embedding=self.embedder,
                     persist_directory=str(output_dir),
                     collection_name=index_name,
                 )
@@ -178,6 +181,6 @@ if __name__ == "__main__":
     """
     本地调试入口：读取分块后的 JSON 报告，为每个 chunk 生成 embedding 并保存为 ChromaDB 向量库。
     """
-    vdb_ingestor = VectorDBIngestor(default_embedder)
+    vdb_ingestor = VectorDBIngestor(get_openai_embedding())
     vdb_ingestor.process_reports()
     print(f"Vector databases created in {settings.chroma_persist_dir}")

@@ -54,7 +54,14 @@ class OpenAIEmbedder:
 
 
 # 类外部默认实例化，供其他模块直接复用
-default_embedder = OpenAIEmbedder()
+
+def get_openai_embedding():
+    return OpenAIEmbeddings(
+                model= settings.embedding_model,
+                openai_api_key=settings.openai_api_key,
+                openai_api_base=settings.openai_api_base or None,
+            )
+
 
 
 class OpenAIVectorDBIngestor:

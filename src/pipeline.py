@@ -2,6 +2,7 @@
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from pyprojroot import here
 import logging
 import os
 import json
@@ -12,7 +13,7 @@ import time
 # 将项目根目录加入 sys.path，支持直接运行本文件
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.pdf_parsing import PDFParser
+# from src.pdf_parsing import PDFParser
 from src import pdf_mineru
 from src.parsed_reports_merging import PageTextPreparation
 from src.text_splitter import TextSplitter
@@ -106,12 +107,12 @@ class Pipeline:
             except Exception as e:
                 print(f"Error converting JSON to CSV: {str(e)}")
 
-    @staticmethod
-    def download_docling_models(): 
-        # 下载Docling所需模型，避免首次运行时自动下载
-        logging.basicConfig(level=logging.DEBUG)
-        parser = PDFParser(output_dir=here())
-        parser.parse_and_export(input_doc_paths=[here() / "src/dummy_report.pdf"])
+    # @staticmethod
+    # def download_docling_models(): 
+    #     # 下载Docling所需模型，避免首次运行时自动下载
+    #     logging.basicConfig(level=logging.DEBUG)
+    #     parser = PDFParser(output_dir=here())
+    #     parser.parse_and_export(input_doc_paths=[here() / "src/dummy_report.pdf"])
 
     def parse_pdf_reports_parallel(self, chunk_size: int = 2, max_workers: int = 10):
         """多进程并行解析PDF报告，提升处理效率
@@ -194,7 +195,8 @@ class Pipeline:
         input_dir = self.paths.documents_dir
         output_dir = self.paths.vector_db_dir
         
-        vdb_ingestor = VectorDBIngestor()
+        from openai_embedding import get_openai_embedding
+        vdb_ingestor = VectorDBIngestor(embedder=get_openai_embedding())
         vdb_ingestor.process_reports(input_dir, output_dir)
         print(f"Vector databases created in {output_dir}")
     
@@ -364,8 +366,11 @@ if __name__ == "__main__":
     # pipeline.chunk_reports2() 
     
     # 6. 从分块报告创建向量数据库，输出到 databases/vector_dbs
-    print('6. 从分块报告创建向量数据库，输出到 databases/vector_dbs')
-    pipeline.create_vector_dbs()     
+    # print('6. 从分块报告创建向量数据库，输出到 databases/vector_dbs')
+    # pipeline.create_vector_dbs()     
+
+    print("bm25关键词构建-------")
+    pipeline.create_bm25_db()
     
     # 7. 处理问题并生成答案，具体逻辑取决于 run_config
     # 默认questions.json
