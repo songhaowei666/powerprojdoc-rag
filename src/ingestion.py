@@ -8,6 +8,7 @@ from langchain_openai import OpenAIEmbeddings
 from tqdm import tqdm
 import hashlib
 import jieba
+import numpy as np
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -33,7 +34,22 @@ class BM25Ingestor:
         """从文本块列表创建BM25索引，使用 jieba 进行中文分词。"""
         tokenized_chunks = [list(jieba.cut(chunk)) for chunk in chunks]
         return BM25Okapi(tokenized_chunks)
-    
+
+    @staticmethod
+    def _build_chunk_metadata(chunk: dict, metainfo: dict) -> dict:
+        """为单个 chunk 构建元数据字典，保留页码、文档来源等信息。"""
+        return {
+            "chunk_id": chunk.get("id", 0),
+            "chunk_type": chunk.get("type", ""),
+            "page": chunk.get("page", 0),
+            "length_tokens": chunk.get("length_tokens", 0),
+            "sha1": metainfo.get("sha1", ""),
+            "sha1_name": metainfo.get("sha1_name", ""),
+            "company_name": metainfo.get("company_name", ""),
+            "file_name": metainfo.get("file_name", ""),
+            "pages_amount": metainfo.get("pages_amount", 0),
+        }
+
     def process_reports(
         self,
         all_reports_dir: Path | None = None,
@@ -54,19 +70,69 @@ class BM25Ingestor:
         output_dir.mkdir(parents=True, exist_ok=True)
         all_report_paths = list(all_reports_dir.glob("*.json"))
 
-        all_chunks = []
+        all_chunks: List[str] = []
+        all_metadatas: List[dict] = []
         for report_path in tqdm(all_report_paths, desc="Processing reports for BM25"):
             with open(report_path, 'r', encoding='utf-8') as f:
                 report_data = json.load(f)
-            all_chunks.extend([chunk['text'] for chunk in report_data['content']['chunks']])
+            metainfo = report_data.get("metainfo", {})
+            for chunk in report_data['content']['chunks']:
+                all_chunks.append(chunk['text'])
+                all_metadatas.append(self._build_chunk_metadata(chunk, metainfo))
 
         if all_chunks:
             bm25_index = self.create_bm25_index(all_chunks)
             output_file = output_dir / f"{index_name}.pkl"
             with open(output_file, 'wb') as f:
-                pickle.dump(bm25_index, f)
+                pickle.dump({"index": bm25_index, "metadatas": all_metadatas, "texts": all_chunks}, f)
 
         print(f"Processed {len(all_report_paths)} reports")
+
+    @staticmethod
+    def load_bm25_index(index_path: Path) -> tuple[BM25Okapi, List[dict], List[str]]:
+        """加载BM25索引及其对应的元数据、文本列表。
+
+        兼容旧格式（纯 BM25Okapi 对象）与新版格式（dict 含 index + metadatas + texts）。
+
+        返回：
+            (bm25_index, metadatas, texts)
+        """
+        with open(index_path, 'rb') as f:
+            data = pickle.load(f)
+        if isinstance(data, dict):
+            return data["index"], data["metadatas"], data.get("texts", [])
+        # 兼容旧格式：纯 BM25Okapi 对象
+        return data, [], []
+
+    def search(
+        self,
+        query: str,
+        index_name: str = "default",
+        output_dir: Path | None = None,
+    ) -> tuple[np.ndarray, List[dict], List[str]]:
+        """根据 query 查询指定 BM25 索引，返回所有 chunk 的 relevance scores、元数据及文本。
+
+        参数：
+            query: 查询文本
+            index_name: 索引标识，用于定位 `{index_name}.pkl` 文件
+            output_dir: 索引文件所在目录；为空时取 `settings.bm25_output_dir`
+
+        返回：
+            (scores, metadatas, texts) — 三者长度一致
+
+        异常：
+            FileNotFoundError: 索引文件不存在时抛出
+        """
+        if output_dir is None:
+            output_dir = Path(settings.bm25_output_dir)
+        index_path = output_dir / f"{index_name}.pkl"
+        if not index_path.exists():
+            raise FileNotFoundError(f"BM25 index not found: {index_path}")
+
+        bm25_index, metadatas, texts = self.load_bm25_index(index_path)
+        tokenized_query = list(jieba.cut(query))
+        scores = bm25_index.get_scores(tokenized_query)
+        return scores, metadatas, texts
 
 # VectorDBIngestor：向量库构建与保存工具
 class VectorDBIngestor:

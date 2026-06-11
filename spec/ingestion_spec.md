@@ -84,8 +84,16 @@ class BM25Ingestor:
     def __init__(self)
     
     def create_bm25_index(self, chunks: List[str]) -> BM25Okapi
+
+    @staticmethod
+    def _build_chunk_metadata(chunk: dict, metainfo: dict) -> dict
     
     def process_reports(self, all_reports_dir: Path | None = None, output_dir: Path | None = None, index_name: str = "default")
+
+    @staticmethod
+    def load_bm25_index(index_path: Path) -> tuple[BM25Okapi, list[dict], list[str]]
+
+    def search(self, query: str, index_name: str = "default", output_dir: Path | None = None) -> tuple[np.ndarray, list[dict], list[str]]
 ```
 
 ### 4.2 create_bm25_index
@@ -104,16 +112,64 @@ class BM25Ingestor:
 2. `output_dir` 为空时，自动取 `settings.bm25_output_dir`（`.env` 中的 `BM25_OUTPUT_DIR`，默认 `data/stock_data/databases/bm25_index`）
 3. `output_dir.mkdir(parents=True, exist_ok=True)` — 自动创建输出目录
 4. 遍历 `all_reports_dir.glob("*.json")`，带 tqdm 进度条
-5. 收集所有报告的 `content.chunks` 中的 `text` 字段
-6. 调用 `create_bm25_index` 构建合并索引
-7. 保存为 `pickle`，文件名为 `{index_name}.pkl`
-8. 打印处理数量
+5. 逐报告读取 JSON，提取 `metainfo` 与 `content.chunks`
+6. 对每个 chunk：
+   - 收集 `text` 字段
+   - 调用 `_build_chunk_metadata(chunk, metainfo)` 生成元数据（含 `chunk_id`, `chunk_type`, `page`, `length_tokens`, `sha1`, `sha1_name`, `company_name`, `file_name`, `pages_amount`）
+7. 调用 `create_bm25_index` 构建合并索引
+8. 将索引、元数据列表与原始文本列表一起保存为 `pickle`，文件名为 `{index_name}.pkl`，格式为 `{"index": BM25Okapi, "metadatas": List[dict], "texts": List[str]}`
+9. 打印处理数量
 
 **输出文件**：
 ```
 output_dir/
 └── {index_name}.pkl
 ```
+
+### 4.4 _build_chunk_metadata
+
+| 项 | 说明 |
+|----|------|
+| 输入 | `chunk: dict` — 单个 chunk 对象；`metainfo: dict` — 报告元信息 |
+| 输出 | `dict` — 包含以下字段的元数据字典 |
+
+**输出字段**：
+
+| 字段 | 来源 | 默认值 |
+|------|------|--------|
+| `chunk_id` | `chunk["id"]` | `0` |
+| `chunk_type` | `chunk["type"]` | `""` |
+| `page` | `chunk["page"]` | `0` |
+| `length_tokens` | `chunk["length_tokens"]` | `0` |
+| `sha1` | `metainfo["sha1"]` | `""` |
+| `sha1_name` | `metainfo["sha1_name"]` | `""` |
+| `company_name` | `metainfo["company_name"]` | `""` |
+| `file_name` | `metainfo["file_name"]` | `""` |
+| `pages_amount` | `metainfo["pages_amount"]` | `0` |
+
+### 4.5 load_bm25_index
+
+| 项 | 说明 |
+|----|------|
+| 输入 | `index_path: Path` — `.pkl` 文件路径 |
+| 输出 | `tuple[BM25Okapi, list[dict], list[str]]` — (索引对象, 元数据列表, 原始文本列表) |
+| 兼容性 | 兼容旧格式：纯 `BM25Okapi` 对象时，元数据和文本均返回 `[]` |
+
+### 4.6 search
+
+| 项 | 说明 |
+|----|------|
+| 输入 | `query: str` — 查询文本；`index_name: str` — 索引标识；`output_dir: Path \| None` — 索引目录 |
+| 分词 | `jieba.cut(query)` — 与构建索引时保持一致 |
+| 输出 | `tuple[np.ndarray, list[dict], list[str]]` — (scores 数组, 元数据列表, 原始文本列表) |
+| 异常 | `FileNotFoundError` — 索引文件不存在 |
+
+**流程**：
+1. `output_dir` 为空时回退到 `settings.bm25_output_dir`
+2. 构造路径 `{output_dir}/{index_name}.pkl`
+3. 调用 `load_bm25_index` 加载索引与元数据
+4. 对 query 用 `jieba.cut` 分词后调用 `bm25_index.get_scores(tokenized_query)`
+5. 返回 `(scores, metadatas)`，两者长度一致
 
 ---
 
@@ -221,7 +277,7 @@ class OpenAIEmbedder:
 | BM25: `output_dir` 为空 | 自动回退到 `settings.bm25_output_dir` |
 | BM25: 所有报告 chunks 为空 | 不会创建 `.pkl` 文件 |
 | BM25: JSON 缺少 `content.chunks` | 代码未做防御，会抛 `KeyError` |
-| BM25: JSON 缺少 `metainfo.sha1` | 代码未做防御，会抛 `KeyError` |
+| BM25: JSON 缺少 `metainfo` | `_build_chunk_metadata` 回退为空 dict，字段取默认值 |
 | Vector: `OPENAI_API_KEY` 未设置 | `settings.openai_api_key` 为空，API 调用时由 OpenAI SDK 抛错 |
 | Vector: 单条文本为空字符串 | `ValueError`（过滤前拦截） |
 | Vector: 所有文本过滤后为空 | `ValueError` |

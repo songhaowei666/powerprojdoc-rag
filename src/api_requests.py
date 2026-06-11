@@ -40,7 +40,7 @@ class BaseOpenaiProcessor:
             model=self.default_model,
             api_key=self.api_key,
             base_url=self.api_base,
-            timeout=5,
+            timeout=120,
             max_retries=2,
             temperature=0.5,
         )

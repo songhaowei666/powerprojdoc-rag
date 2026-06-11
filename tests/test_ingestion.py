@@ -96,10 +96,20 @@ class TestBM25Ingestor:
         expected_file = output_dir / "default.pkl"
         assert expected_file.exists()
 
-        # Verify it's a valid BM25Okapi pickle
+        # Verify new format: dict with index and metadatas
         with open(expected_file, "rb") as f:
-            loaded_index = pickle.load(f)
-        assert hasattr(loaded_index, "get_scores")
+            loaded_data = pickle.load(f)
+        assert isinstance(loaded_data, dict)
+        assert "index" in loaded_data
+        assert "metadatas" in loaded_data
+        assert hasattr(loaded_data["index"], "get_scores")
+
+        # Verify metadata preserved
+        metadatas = loaded_data["metadatas"]
+        assert len(metadatas) == 3
+        for m in metadatas:
+            assert m["sha1"] == sample_report["metainfo"]["sha1"]
+            assert m["company_name"] == sample_report["metainfo"]["company_name"]
 
     def test_process_reports_empty_dir(self, tmp_path, capsys):
         reports_dir = tmp_path / "empty_reports"
@@ -112,6 +122,57 @@ class TestBM25Ingestor:
         captured = capsys.readouterr()
         assert "Processed 0 reports" in captured.out
 
+    def test_load_bm25_index(self, tmp_path):
+        ingestor = BM25Ingestor()
+        chunks = ["hello world", "foo bar baz"]
+        index = ingestor.create_bm25_index(chunks)
+        metadatas = [{"page": 1}, {"page": 2}]
+
+        pkl_path = tmp_path / "test.pkl"
+        with open(pkl_path, "wb") as f:
+            pickle.dump({"index": index, "metadatas": metadatas, "texts": chunks}, f)
+
+        loaded_index, loaded_metadatas, loaded_texts = BM25Ingestor.load_bm25_index(pkl_path)
+        assert hasattr(loaded_index, "get_scores")
+        assert loaded_metadatas == metadatas
+        assert loaded_texts == chunks
+
+    def test_load_bm25_index_legacy_format(self, tmp_path):
+        """兼容旧格式：纯 BM25Okapi 对象"""
+        ingestor = BM25Ingestor()
+        chunks = ["hello world"]
+        index = ingestor.create_bm25_index(chunks)
+
+        pkl_path = tmp_path / "legacy.pkl"
+        with open(pkl_path, "wb") as f:
+            pickle.dump(index, f)
+
+        loaded_index, loaded_metadatas, loaded_texts = BM25Ingestor.load_bm25_index(pkl_path)
+        assert hasattr(loaded_index, "get_scores")
+        assert loaded_metadatas == []
+        assert loaded_texts == []
+
+    def test_search_success(self, tmp_path):
+        ingestor = BM25Ingestor()
+        chunks = ["hello world", "foo bar baz", "test example"]
+        index = ingestor.create_bm25_index(chunks)
+        metadatas = [{"page": 1}, {"page": 2}, {"page": 3}]
+
+        pkl_path = tmp_path / "default.pkl"
+        with open(pkl_path, "wb") as f:
+            pickle.dump({"index": index, "metadatas": metadatas, "texts": chunks}, f)
+
+        scores, result_metadatas, result_texts = ingestor.search("hello", output_dir=tmp_path)
+        assert isinstance(scores, np.ndarray)
+        assert len(scores) == 3
+        assert result_metadatas == metadatas
+        assert result_texts == chunks
+
+    def test_search_file_not_found(self, tmp_path):
+        ingestor = BM25Ingestor()
+        with pytest.raises(FileNotFoundError, match="BM25 index not found"):
+            ingestor.search("hello", index_name="nonexistent", output_dir=tmp_path)
+
     def test_process_reports_multiple_reports(self, tmp_path):
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
@@ -119,7 +180,7 @@ class TestBM25Ingestor:
         for i in range(3):
             report = {
                 "metainfo": {"sha1": f"sha{i}", "company_name": f"公司{i}"},
-                "content": {"chunks": [{"text": f"text {i}"}]},
+                "content": {"chunks": [{"text": f"text {i}", "page": i + 1, "id": i}]},
             }
             (reports_dir / f"report_{i}.json").write_text(
                 json.dumps(report), encoding="utf-8"
@@ -133,6 +194,13 @@ class TestBM25Ingestor:
         assert len(list(output_dir.glob("*.pkl"))) == 1
         expected_file = output_dir / "merged.pkl"
         assert expected_file.exists()
+
+        with open(expected_file, "rb") as f:
+            loaded_data = pickle.load(f)
+        assert len(loaded_data["metadatas"]) == 3
+        assert loaded_data["metadatas"][1]["page"] == 2
+        assert loaded_data["metadatas"][1]["chunk_id"] == 1
+        assert loaded_data["metadatas"][1]["sha1"] == "sha1"
 
 
 # ---------------------------------------------------------------------------

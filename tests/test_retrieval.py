@@ -16,6 +16,8 @@ import pytest
 # Ensure src is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from langchain_core.documents import Document
+from src.ingestion import BM25Ingestor
 from src.retrieval import BM25Retriever, HybridRetriever, VectorRetriever
 
 
@@ -80,22 +82,30 @@ class TestBM25Retriever:
         retriever = BM25Retriever(bm25_db_dir=tmp_path, documents_dir=tmp_path)
         assert retriever.bm25_db_dir == tmp_path
         assert retriever.documents_dir == tmp_path
+        assert retriever.index_name == "default"
 
-    @patch("src.retrieval.pickle.load")
-    def test_retrieve_by_company_name_success(self, mock_pickle_load, tmp_path, sample_document, mock_bm25_index):
-        doc_path = tmp_path / "doc.json"
-        doc_path.write_text(json.dumps(sample_document), encoding="utf-8")
+    def test_init_custom_index_name(self, tmp_path):
+        retriever = BM25Retriever(bm25_db_dir=tmp_path, documents_dir=tmp_path, index_name="custom")
+        assert retriever.index_name == "custom"
+
+    @patch.object(BM25Ingestor, "search")
+    def test_retrieve_success(self, mock_search, tmp_path):
+        mock_search.return_value = (
+            np.array([2.5, 1.0, 3.2]),
+            [
+                {"page": 1, "sha1": "sha1"},
+                {"page": 2, "sha1": "sha1"},
+                {"page": 3, "sha1": "sha1"},
+            ],
+            ["chunk A text", "chunk B text", "chunk C text"],
+        )
 
         bm25_db_dir = tmp_path / "bm25"
         bm25_db_dir.mkdir()
-        bm25_path = bm25_db_dir / f"{sample_document['metainfo']['sha1']}.pkl"
-        bm25_path.write_text("dummy pickle data")
-        mock_pickle_load.return_value = mock_bm25_index
+        (bm25_db_dir / "default.pkl").write_text("dummy")
 
         retriever = BM25Retriever(bm25_db_dir=bm25_db_dir, documents_dir=tmp_path)
-        results = retriever.retrieve_by_company_name(
-            company_name="示例科技", query="营业收入", top_n=2
-        )
+        results = retriever.retrieve(query="营业收入", top_n=2)
 
         assert len(results) == 2
         # Scores sorted desc: 3.2 (idx 2), 2.5 (idx 0)
@@ -106,47 +116,61 @@ class TestBM25Retriever:
         assert results[1]["distance"] == 2.5
         assert results[1]["text"] == "chunk A text"
 
-    def test_retrieve_company_not_found(self, tmp_path):
-        retriever = BM25Retriever(bm25_db_dir=tmp_path, documents_dir=tmp_path)
-        with pytest.raises(ValueError, match="No report found with '未知公司' company name"):
-            retriever.retrieve_by_company_name(company_name="未知公司", query="test")
+    @patch.object(BM25Ingestor, "search")
+    def test_retrieve_return_parent_pages(self, mock_search, tmp_path):
+        # 创建真实文档 JSON，包含 pages，用于 _load_pages_mapping
+        doc = {
+            "metainfo": {"sha1": "sha1", "company_name": "示例科技"},
+            "content": {
+                "pages": [
+                    {"page": 1, "text": "full page 1 text"},
+                    {"page": 2, "text": "full page 2 text"},
+                    {"page": 3, "text": "full page 3 text"},
+                ]
+            },
+        }
+        (tmp_path / "doc.json").write_text(json.dumps(doc), encoding="utf-8")
 
-    @patch("src.retrieval.pickle.load")
-    def test_retrieve_return_parent_pages(self, mock_pickle_load, tmp_path, sample_document, mock_bm25_index):
-        doc_path = tmp_path / "doc.json"
-        doc_path.write_text(json.dumps(sample_document), encoding="utf-8")
+        mock_search.return_value = (
+            np.array([2.5, 1.0, 3.2]),
+            [
+                {"page": 1, "sha1": "sha1"},
+                {"page": 2, "sha1": "sha1"},
+                {"page": 3, "sha1": "sha1"},
+            ],
+            ["chunk A text", "chunk B text", "chunk C text"],
+        )
 
         bm25_db_dir = tmp_path / "bm25"
         bm25_db_dir.mkdir()
-        bm25_path = bm25_db_dir / f"{sample_document['metainfo']['sha1']}.pkl"
-        bm25_path.write_text("dummy")
-        mock_pickle_load.return_value = mock_bm25_index
+        (bm25_db_dir / "default.pkl").write_text("dummy")
 
         retriever = BM25Retriever(bm25_db_dir=bm25_db_dir, documents_dir=tmp_path)
-        results = retriever.retrieve_by_company_name(
-            company_name="示例科技", query="test", top_n=3, return_parent_pages=True
-        )
+        results = retriever.retrieve(query="test", top_n=3, return_parent_pages=True)
 
         # All chunks map to distinct pages, so 3 results
         assert len(results) == 3
         assert results[0]["text"] == "full page 3 text"
         assert results[1]["text"] == "full page 1 text"
 
-    @patch("src.retrieval.pickle.load")
-    def test_retrieve_top_n_larger_than_chunks(self, mock_pickle_load, tmp_path, sample_document, mock_bm25_index):
-        doc_path = tmp_path / "doc.json"
-        doc_path.write_text(json.dumps(sample_document), encoding="utf-8")
+    @patch.object(BM25Ingestor, "search")
+    def test_retrieve_top_n_larger_than_chunks(self, mock_search, tmp_path):
+        mock_search.return_value = (
+            np.array([2.5, 1.0, 3.2]),
+            [
+                {"page": 1, "sha1": "sha1"},
+                {"page": 2, "sha1": "sha1"},
+                {"page": 3, "sha1": "sha1"},
+            ],
+            ["chunk A text", "chunk B text", "chunk C text"],
+        )
 
         bm25_db_dir = tmp_path / "bm25"
         bm25_db_dir.mkdir()
-        bm25_path = bm25_db_dir / f"{sample_document['metainfo']['sha1']}.pkl"
-        bm25_path.write_text("dummy")
-        mock_pickle_load.return_value = mock_bm25_index
+        (bm25_db_dir / "default.pkl").write_text("dummy")
 
         retriever = BM25Retriever(bm25_db_dir=bm25_db_dir, documents_dir=tmp_path)
-        results = retriever.retrieve_by_company_name(
-            company_name="示例科技", query="test", top_n=100
-        )
+        results = retriever.retrieve(query="test", top_n=100)
 
         # Should cap at number of chunks (3)
         assert len(results) == 3
@@ -161,324 +185,117 @@ class TestVectorRetriever:
 
     # -- Constructor / Setup --
 
-    @patch("src.retrieval.VectorRetriever._load_dbs")
-    @patch("src.retrieval.VectorRetriever._set_up_llm")
-    def test_init_default_provider(self, mock_setup_llm, mock_load_dbs, tmp_path):
-        mock_load_dbs.return_value = []
-        mock_setup_llm.return_value = None
-        retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        assert retriever.embedding_provider == "dashscope"
-        mock_load_dbs.assert_called_once()
-        mock_setup_llm.assert_called_once()
-
-    @patch("src.retrieval.VectorRetriever._load_dbs")
-    @patch("src.retrieval.VectorRetriever._set_up_llm")
-    def test_init_openai_provider(self, mock_setup_llm, mock_load_dbs, tmp_path):
-        mock_load_dbs.return_value = []
-        mock_setup_llm.return_value = MagicMock()
+    @patch("src.retrieval.VectorRetriever._load_vectorstore")
+    def test_init(self, mock_load_store, tmp_path):
+        mock_load_store.return_value = MagicMock()
         retriever = VectorRetriever(
-            vector_db_dir=tmp_path, documents_dir=tmp_path, embedding_provider="OpenAI"
+            vector_db_dir=tmp_path, documents_dir=tmp_path, index_name="custom"
         )
-        assert retriever.embedding_provider == "openai"
+        assert retriever.vector_db_dir == tmp_path
+        assert retriever.documents_dir == tmp_path
+        assert retriever.index_name == "custom"
 
-    # -- _set_up_llm --
+    @patch("src.retrieval.VectorRetriever._load_vectorstore")
+    def test_init_default_index_name(self, mock_load_store, tmp_path):
+        mock_load_store.return_value = MagicMock()
+        retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
+        assert retriever.index_name == "default"
 
-    @patch("src.retrieval.load_dotenv")
-    @patch("src.retrieval.os.getenv")
-    @patch("src.retrieval.OpenAI")
-    def test_setup_llm_openai(self, mock_openai_cls, mock_getenv, mock_dotenv, tmp_path):
-        mock_getenv.return_value = "sk-test"
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
+    # -- _load_pages_mapping --
 
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.embedding_provider = "openai"
-        llm = retriever._set_up_llm()
-
-        mock_openai_cls.assert_called_once_with(
-            api_key="sk-test", timeout=None, max_retries=2
+    def test_load_pages_mapping(self, tmp_path, sample_document):
+        (tmp_path / "doc.json").write_text(
+            json.dumps(sample_document), encoding="utf-8"
         )
-        assert llm is mock_client
-
-    @patch("src.retrieval.load_dotenv")
-    @patch("src.retrieval.os.getenv")
-    def test_setup_llm_dashscope(self, mock_getenv, mock_dotenv, tmp_path):
-        mock_getenv.return_value = "ds-test"
-        mock_dashscope = MagicMock()
-        with patch.dict(sys.modules, {"dashscope": mock_dashscope}):
-            retriever = VectorRetriever.__new__(VectorRetriever)
-            retriever.embedding_provider = "dashscope"
-            llm = retriever._set_up_llm()
-            assert mock_dashscope.api_key == "ds-test"
-            assert llm is None
-
-    @patch("src.retrieval.load_dotenv")
-    def test_setup_llm_invalid_provider(self, mock_dotenv, tmp_path):
         retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.embedding_provider = "unknown"
-        with pytest.raises(ValueError, match="不支持的 embedding provider"):
-            retriever._set_up_llm()
+        retriever.documents_dir = tmp_path
+        mapping = retriever._load_pages_mapping()
+        sha1 = sample_document["metainfo"]["sha1"]
+        assert mapping[sha1][1] == "full page 1 text"
+        assert mapping[sha1][2] == "full page 2 text"
+        assert mapping[sha1][3] == "full page 3 text"
 
-    # -- _get_embedding (OpenAI) --
+    # -- _find_report_by_company --
 
-    def test_get_embedding_openai(self):
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.embedding_provider = "openai"
-        mock_llm = MagicMock()
-        mock_llm.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.1, 0.2, 0.3])]
+    def test_find_report_by_company(self, tmp_path, sample_document):
+        (tmp_path / "doc.json").write_text(
+            json.dumps(sample_document), encoding="utf-8"
         )
-        retriever.llm = mock_llm
+        retriever = VectorRetriever.__new__(VectorRetriever)
+        retriever.documents_dir = tmp_path
+        doc = retriever._find_report_by_company("示例科技")
+        assert doc["metainfo"]["company_name"] == "示例科技"
 
-        emb = retriever._get_embedding("hello")
-        assert emb == [0.1, 0.2, 0.3]
-        mock_llm.embeddings.create.assert_called_once_with(
-            input="hello", model="text-embedding-3-large"
+    def test_find_report_not_found(self, tmp_path):
+        retriever = VectorRetriever.__new__(VectorRetriever)
+        retriever.documents_dir = tmp_path
+        with pytest.raises(ValueError, match="No report found with '未知公司' company name"):
+            retriever._find_report_by_company("未知公司")
+
+    # -- retrieve --
+
+    @patch("src.retrieval.VectorRetriever._load_vectorstore")
+    def test_vector_retrieve_success(self, mock_load_store, tmp_path):
+        mock_doc1 = Document(
+            page_content="chunk C text",
+            metadata={"page": 3, "sha1": "sha1", "company_name": "示例科技"},
         )
-
-    # -- _get_embedding (DashScope) --
-
-    def test_get_embedding_dashscope_embeddings_format(self):
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.embedding_provider = "dashscope"
-        retriever.llm = None
-
-        mock_rsp = {
-            "output": {
-                "embeddings": [
-                    {"text_index": 0, "embedding": [0.4, 0.5, 0.6]}
-                ]
-            }
-        }
-        mock_dashscope = MagicMock()
-        mock_dashscope.TextEmbedding.call.return_value = mock_rsp
-        with patch.dict(sys.modules, {"dashscope": mock_dashscope}):
-            emb = retriever._get_embedding("hello")
-            assert emb == [0.4, 0.5, 0.6]
-
-    def test_get_embedding_dashscope_embedding_format(self):
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.embedding_provider = "dashscope"
-        retriever.llm = None
-
-        mock_rsp = {"output": {"embedding": [0.7, 0.8, 0.9]}}
-        mock_dashscope = MagicMock()
-        mock_dashscope.TextEmbedding.call.return_value = mock_rsp
-        with patch.dict(sys.modules, {"dashscope": mock_dashscope}):
-            emb = retriever._get_embedding("hello")
-            assert emb == [0.7, 0.8, 0.9]
-
-    def test_get_embedding_dashscope_empty_embedding(self):
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.embedding_provider = "dashscope"
-        retriever.llm = None
-
-        mock_rsp = {"output": {"embeddings": [{"text_index": 0, "embedding": []}]}}
-        mock_dashscope = MagicMock()
-        mock_dashscope.TextEmbedding.call.return_value = mock_rsp
-        with patch.dict(sys.modules, {"dashscope": mock_dashscope}):
-            with pytest.raises(RuntimeError, match="DashScope返回的embedding为空"):
-                retriever._get_embedding("hello")
-
-    def test_get_embedding_dashscope_malformed_response(self):
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.embedding_provider = "dashscope"
-        retriever.llm = None
-
-        mock_rsp = {"unexpected": "key"}
-        mock_dashscope = MagicMock()
-        mock_dashscope.TextEmbedding.call.return_value = mock_rsp
-        with patch.dict(sys.modules, {"dashscope": mock_dashscope}):
-            with pytest.raises(RuntimeError, match="DashScope embedding API返回格式异常"):
-                retriever._get_embedding("hello")
-
-    # -- _load_dbs --
-
-    @patch("src.retrieval.faiss.read_index")
-    def test_load_dbs_success(self, mock_read_index, tmp_path, sample_document):
-        doc_path = tmp_path / "doc.json"
-        doc_path.write_text(json.dumps(sample_document), encoding="utf-8")
-
-        vector_db_dir = tmp_path / "vector"
-        vector_db_dir.mkdir()
-        faiss_path = vector_db_dir / f"{sample_document['metainfo']['sha1']}.faiss"
-        faiss_path.write_text("dummy")
-
-        mock_index = MagicMock()
-        mock_read_index.return_value = mock_index
-
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.vector_db_dir = vector_db_dir
-        retriever.documents_dir = tmp_path
-        dbs = retriever._load_dbs()
-
-        assert len(dbs) == 1
-        assert dbs[0]["name"] == sample_document["metainfo"]["sha1"]
-        assert dbs[0]["vector_db"] is mock_index
-        assert dbs[0]["document"] == sample_document
-
-    @patch("src.retrieval.faiss.read_index")
-    def test_load_dbs_missing_sha1(self, mock_read_index, tmp_path):
-        doc_path = tmp_path / "doc.json"
-        bad_doc = {"metainfo": {"company_name": "test"}}  # no sha1
-        doc_path.write_text(json.dumps(bad_doc), encoding="utf-8")
-
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.vector_db_dir = tmp_path
-        retriever.documents_dir = tmp_path
-        dbs = retriever._load_dbs()
-        assert len(dbs) == 0
-
-    @patch("src.retrieval.faiss.read_index")
-    def test_load_dbs_missing_faiss_file(self, mock_read_index, tmp_path, sample_document):
-        doc_path = tmp_path / "doc.json"
-        doc_path.write_text(json.dumps(sample_document), encoding="utf-8")
-
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.vector_db_dir = tmp_path
-        retriever.documents_dir = tmp_path
-        dbs = retriever._load_dbs()
-        assert len(dbs) == 0
-
-    def test_load_dbs_json_error(self, tmp_path, caplog):
-        doc_path = tmp_path / "doc.json"
-        doc_path.write_text("not valid json", encoding="utf-8")
-
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.vector_db_dir = tmp_path
-        retriever.documents_dir = tmp_path
-        with caplog.at_level("ERROR"):
-            dbs = retriever._load_dbs()
-        assert len(dbs) == 0
-        assert "Error loading JSON" in caplog.text
-
-    @patch("src.retrieval.faiss.read_index")
-    def test_load_dbs_faiss_read_error(self, mock_read_index, tmp_path, sample_document, caplog):
-        doc_path = tmp_path / "doc.json"
-        doc_path.write_text(json.dumps(sample_document), encoding="utf-8")
-
-        vector_db_dir = tmp_path / "vector"
-        vector_db_dir.mkdir()
-        faiss_path = vector_db_dir / f"{sample_document['metainfo']['sha1']}.faiss"
-        faiss_path.write_text("dummy")
-
-        mock_read_index.side_effect = RuntimeError("corrupted index")
-
-        retriever = VectorRetriever.__new__(VectorRetriever)
-        retriever.vector_db_dir = vector_db_dir
-        retriever.documents_dir = tmp_path
-        with caplog.at_level("ERROR"):
-            dbs = retriever._load_dbs()
-        assert len(dbs) == 0
-        assert "Error reading vector DB" in caplog.text
-
-    # -- retrieve_by_company_name --
-
-    @patch("src.retrieval.VectorRetriever._load_dbs")
-    @patch("src.retrieval.VectorRetriever._set_up_llm")
-    @patch("src.retrieval.VectorRetriever._get_embedding")
-    def test_vector_retrieve_success(
-        self, mock_get_emb, mock_setup, mock_load, tmp_path, sample_document, mock_faiss_index
-    ):
-        mock_load.return_value = [
-            {
-                "name": sample_document["metainfo"]["sha1"],
-                "vector_db": mock_faiss_index,
-                "document": sample_document,
-            }
+        mock_doc2 = Document(
+            page_content="chunk A text",
+            metadata={"page": 1, "sha1": "sha1", "company_name": "示例科技"},
+        )
+        mock_store = MagicMock()
+        mock_store.similarity_search_with_score.return_value = [
+            (mock_doc1, 0.1),
+            (mock_doc2, 0.5),
         ]
-        mock_setup.return_value = None
-        mock_get_emb.return_value = [0.1, 0.2]
-
-        # create dummy faiss file to pass the exists() check in retrieve_by_company_name
-        faiss_file = tmp_path / f"{sample_document['metainfo']['sha1']}.faiss"
-        faiss_file.write_text("dummy")
+        mock_load_store.return_value = mock_store
 
         retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        results = retriever.retrieve_by_company_name(
+        results = retriever.retrieve(
             company_name="示例科技", query="test", top_n=2
         )
 
         assert len(results) == 2
-        # indices returned by mock: [2, 0]
         assert results[0]["page"] == 3
         assert results[0]["distance"] == 0.1
         assert results[0]["text"] == "chunk C text"
         assert results[1]["page"] == 1
         assert results[1]["distance"] == 0.5
         assert results[1]["text"] == "chunk A text"
+        mock_store.similarity_search_with_score.assert_called_once_with(
+            "test", k=2, filter={"company_name": "示例科技"}
+        )
 
-    @patch("src.retrieval.VectorRetriever._load_dbs")
-    @patch("src.retrieval.VectorRetriever._set_up_llm")
-    def test_vector_retrieve_company_not_found(self, mock_setup, mock_load, tmp_path):
-        mock_load.return_value = []
-        mock_setup.return_value = None
-
-        retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        with pytest.raises(ValueError, match="No report found with '未知公司' company name"):
-            retriever.retrieve_by_company_name(company_name="未知公司", query="test")
-
-    @patch("src.retrieval.VectorRetriever._load_dbs")
-    @patch("src.retrieval.VectorRetriever._set_up_llm")
-    @patch("src.retrieval.VectorRetriever._get_embedding")
-    def test_vector_retrieve_return_parent_pages(
-        self, mock_get_emb, mock_setup, mock_load, tmp_path, sample_document, mock_faiss_index
-    ):
-        mock_load.return_value = [
-            {
-                "name": sample_document["metainfo"]["sha1"],
-                "vector_db": mock_faiss_index,
-                "document": sample_document,
-            }
+    @patch("src.retrieval.VectorRetriever._load_vectorstore")
+    def test_vector_retrieve_return_parent_pages(self, mock_load_store, tmp_path, sample_document):
+        (tmp_path / "doc.json").write_text(
+            json.dumps(sample_document), encoding="utf-8"
+        )
+        sha1 = sample_document["metainfo"]["sha1"]
+        mock_doc1 = Document(
+            page_content="chunk C text",
+            metadata={"page": 3, "sha1": sha1, "company_name": "示例科技"},
+        )
+        mock_doc2 = Document(
+            page_content="chunk A text",
+            metadata={"page": 1, "sha1": sha1, "company_name": "示例科技"},
+        )
+        mock_store = MagicMock()
+        mock_store.similarity_search_with_score.return_value = [
+            (mock_doc1, 0.1),
+            (mock_doc2, 0.5),
         ]
-        mock_setup.return_value = None
-        mock_get_emb.return_value = [0.1, 0.2]
-
-        faiss_file = tmp_path / f"{sample_document['metainfo']['sha1']}.faiss"
-        faiss_file.write_text("dummy")
+        mock_load_store.return_value = mock_store
 
         retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        results = retriever.retrieve_by_company_name(
+        results = retriever.retrieve(
             company_name="示例科技", query="test", top_n=2, return_parent_pages=True
         )
 
         assert len(results) == 2
         assert results[0]["text"] == "full page 3 text"
         assert results[1]["text"] == "full page 1 text"
-
-    # -- retrieve_all --
-
-    @patch("src.retrieval.VectorRetriever._load_dbs")
-    @patch("src.retrieval.VectorRetriever._set_up_llm")
-    def test_retrieve_all_success(self, mock_setup, mock_load, tmp_path, sample_document):
-        mock_load.return_value = [
-            {
-                "name": sample_document["metainfo"]["sha1"],
-                "vector_db": MagicMock(),
-                "document": sample_document,
-            }
-        ]
-        mock_setup.return_value = None
-
-        retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        results = retriever.retrieve_all(company_name="示例科技")
-
-        assert len(results) == 3
-        for r in results:
-            assert r["distance"] == 0.5
-        assert results[0]["page"] == 1
-        assert results[1]["page"] == 2
-        assert results[2]["page"] == 3
-
-    @patch("src.retrieval.VectorRetriever._load_dbs")
-    @patch("src.retrieval.VectorRetriever._set_up_llm")
-    def test_retrieve_all_not_found(self, mock_setup, mock_load, tmp_path):
-        mock_load.return_value = []
-        mock_setup.return_value = None
-
-        retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        with pytest.raises(ValueError, match="No report found with '未知公司' company name"):
-            retriever.retrieve_all(company_name="未知公司")
 
     # -- get_strings_cosine_similarity --
 
@@ -521,11 +338,11 @@ class TestHybridRetriever:
 
     @patch("src.retrieval.VectorRetriever")
     @patch("src.retrieval.LLMReranker")
-    def test_retrieve_by_company_name(
+    def test_retrieve(
         self, mock_reranker_cls, mock_vector_cls, tmp_path
     ):
         mock_vector_instance = MagicMock()
-        mock_vector_instance.retrieve_by_company_name.return_value = [
+        mock_vector_instance.retrieve.return_value = [
             {"distance": 0.1, "page": 1, "text": "a"},
             {"distance": 0.2, "page": 2, "text": "b"},
         ]
@@ -539,7 +356,7 @@ class TestHybridRetriever:
         mock_reranker_cls.return_value = mock_reranker_instance
 
         retriever = HybridRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        results = retriever.retrieve_by_company_name(
+        results = retriever.retrieve(
             company_name="示例科技",
             query="test",
             llm_reranking_sample_size=10,
@@ -549,7 +366,7 @@ class TestHybridRetriever:
         )
 
         assert len(results) == 2
-        mock_vector_instance.retrieve_by_company_name.assert_called_once_with(
+        mock_vector_instance.retrieve.assert_called_once_with(
             company_name="示例科技",
             query="test",
             top_n=10,
@@ -557,18 +374,18 @@ class TestHybridRetriever:
         )
         mock_reranker_instance.rerank_documents.assert_called_once_with(
             query="test",
-            documents=mock_vector_instance.retrieve_by_company_name.return_value,
+            documents=mock_vector_instance.retrieve.return_value,
             documents_batch_size=5,
             llm_weight=0.7,
         )
 
     @patch("src.retrieval.VectorRetriever")
     @patch("src.retrieval.LLMReranker")
-    def test_retrieve_by_company_name_top_n_clipping(
+    def test_retrieve_top_n_clipping(
         self, mock_reranker_cls, mock_vector_cls, tmp_path
     ):
         mock_vector_instance = MagicMock()
-        mock_vector_instance.retrieve_by_company_name.return_value = [
+        mock_vector_instance.retrieve.return_value = [
             {"distance": 0.1, "page": 1, "text": "a"},
         ]
         mock_vector_cls.return_value = mock_vector_instance
@@ -581,7 +398,7 @@ class TestHybridRetriever:
         mock_reranker_cls.return_value = mock_reranker_instance
 
         retriever = HybridRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
-        results = retriever.retrieve_by_company_name(
+        results = retriever.retrieve(
             company_name="示例科技", query="test", top_n=1
         )
 

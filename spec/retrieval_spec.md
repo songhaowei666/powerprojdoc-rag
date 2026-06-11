@@ -108,9 +108,9 @@ python-dotenv
 }
 ```
 
-### 6.2 BM25 索引 (`bm25_db_dir/{sha1}.pkl`)
+### 6.2 BM25 索引 (`bm25_db_dir/{index_name}.pkl`)
 
-由 `rank_bm25.BM25Okapi` 序列化生成的 `pickle` 文件，文件名与文档 `metainfo.sha1` 对应。
+由 `rank_bm25.BM25Okapi` 序列化生成的 `pickle` 文件，文件名由 `BM25Retriever` 构造时传入的 `index_name` 决定（默认为 `default`）。
 
 ### 6.3 向量索引 (`vector_db_dir/{sha1}.faiss`)
 
@@ -124,11 +124,10 @@ python-dotenv
 
 ```python
 class BM25Retriever:
-    def __init__(self, bm25_db_dir: Path, documents_dir: Path)
+    def __init__(self, bm25_db_dir: Path, documents_dir: Path, index_name: str = "default")
     
-    def retrieve_by_company_name(
+    def retrieve(
         self,
-        company_name: str,
         query: str,
         top_n: int = 3,
         return_parent_pages: bool = False
@@ -137,10 +136,12 @@ class BM25Retriever:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `company_name` | `str` | - | 目标公司名称，用于匹配 `metainfo.company_name` |
+| `bm25_db_dir` | `Path` | - | BM25 索引存放目录 |
+| `documents_dir` | `Path` | - | 文档 JSON 存放目录（`__init__` 时预加载所有 pages 信息） |
+| `index_name` | `str` | `"default"` | 索引标识，决定加载的 `.pkl` 文件名 |
 | `query` | `str` | - | 查询文本 |
 | `top_n` | `int` | `3` | 返回结果数量上限 |
-| `return_parent_pages` | `bool` | `False` | `True` 时返回完整页面（去重），`False` 返回分块 |
+| `return_parent_pages` | `bool` | `False` | `True` 时按 `(sha1, page)` 去重，返回整页内容 |
 
 **返回结构**：
 ```python
@@ -153,6 +154,13 @@ class BM25Retriever:
 ]
 ```
 
+**实现要点**：
+- `__init__` 时遍历 `documents_dir/*.json`，建立 `sha1 -> {page_num: page_text}` 映射表 `_pages_by_sha1`
+- 内部通过 `BM25Ingestor.search(...)` 加载全局索引并计算 scores
+- 不再遍历 `documents_dir` 按 `company_name` 匹配单份报告
+- `return_parent_pages=True` 时，根据 `metadata["sha1"]` + `page` 从 `_pages_by_sha1` 查表获取整页内容；查不到时回退到 chunk text
+- `return_parent_pages=False` 时直接返回 chunk text |
+
 ---
 
 ### 7.2 VectorRetriever
@@ -163,46 +171,48 @@ class VectorRetriever:
         self,
         vector_db_dir: Path,
         documents_dir: Path,
-        embedding_provider: str = "dashscope"
+        index_name: str = "default"
     )
-    
-    def retrieve_by_company_name(
+
+    def retrieve(
         self,
         company_name: str,
         query: str,
-        llm_reranking_sample_size: int = None,   # 占位，当前未使用
+        llm_reranking_sample_size: int = None,   # 占位，兼容 HybridRetriever
         top_n: int = 3,
         return_parent_pages: bool = False
     ) -> List[Dict]
-    
-    def retrieve_all(self, company_name: str) -> List[Dict]
-    
+
     @staticmethod
     def get_strings_cosine_similarity(str1, str2) -> float
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `embedding_provider` | `str` | `"dashscope"` | `"openai"` 或 `"dashscope"` |
+| `vector_db_dir` | `Path` | - | ChromaDB 持久化目录 |
+| `documents_dir` | `Path` | - | 文档 JSON 存放目录（预加载 pages 映射） |
+| `index_name` | `str` | `"default"` | ChromaDB collection 名称 |
 | `top_n` | `int` | `3` | 返回最近邻数量 |
 
-**`_get_embedding` 实现细节**：
-- OpenAI 模式：调用 `self.llm.embeddings.create(input=text, model="text-embedding-3-large")`
-- DashScope 模式：调用 `dashscope.TextEmbedding.call(model="text-embedding-v1", input=[text])`
-- 兼容 DashScope 单条/多条返回格式，空 embedding 时抛 `RuntimeError`
+**实现要点**：
+- `__init__` 时通过 `Chroma(...)` 加载全局向量库，使用 `OpenAIEmbeddings`（与 `VectorDBIngestor` 一致）
+- `__init__` 时遍历 `documents_dir/*.json` 建立 `sha1 -> {page_num: page_text}` 映射表 `_pages_by_sha1`
+- `retrieve` 调用 `Chroma.similarity_search_with_score(query, k=top_n, ...)`；仅当 `company_name` 非空时传入 `filter={"company_name": company_name}`
+- `return_parent_pages=True` 时，根据 `metadata["sha1"]` + `page` 从 `_pages_by_sha1` 查表获取整页内容；查不到时回退到 chunk text
+- 已移除对 DashScope/FAISS 的支持
 
-**`retrieve_by_company_name` 返回结构**：
+**`retrieve` 返回结构**：
 ```python
 [
   {
-    "distance": 0.2345,   # FAISS L2 距离（越小越近）
+    "distance": 0.2345,   # ChromaDB 距离分数（越小越近）
     "page": 1,
     "text": "..."
   }
 ]
 ```
 
-**`retrieve_all` 返回结构**：返回该公司全部页面，`distance` 固定为 `0.5`。
+
 
 ---
 
@@ -212,7 +222,7 @@ class VectorRetriever:
 class HybridRetriever:
     def __init__(self, vector_db_dir: Path, documents_dir: Path)
     
-    def retrieve_by_company_name(
+    def retrieve(
         self,
         company_name: str,
         query: str,
@@ -347,10 +357,11 @@ from src.retrieval import BM25Retriever
 
 retriever = BM25Retriever(
     bm25_db_dir=Path("data/bm25"),
-    documents_dir=Path("data/documents")
+    documents_dir=Path("data/documents"),
+    index_name="default"
 )
 
-results = retriever.retrieve_by_company_name(
+results = retriever.retrieve(
     company_name="示例科技",
     query="营业收入增长原因",
     top_n=5
@@ -368,7 +379,7 @@ retriever = VectorRetriever(
     embedding_provider="dashscope"   # 或 "openai"
 )
 
-results = retriever.retrieve_by_company_name(
+results = retriever.retrieve(
     company_name="示例科技",
     query="核心竞争力分析",
     top_n=5
@@ -385,7 +396,7 @@ retriever = HybridRetriever(
     documents_dir=Path("data/documents")
 )
 
-results = retriever.retrieve_by_company_name(
+results = retriever.retrieve(
     company_name="示例科技",
     query="未来三年战略规划",
     llm_reranking_sample_size=28,

@@ -1,142 +1,216 @@
 import json
 import logging
+import sys
 from typing import List, Tuple, Dict, Union
 from rank_bm25 import BM25Okapi
 import pickle
 from pathlib import Path
-import faiss
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import numpy as np
-from src.reranking import LLMReranker
-import hashlib
 import pandas as pd
 import time
+
+# 将项目根目录加入 sys.path，支持直接运行本文件
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.ingestion import BM25Ingestor
+from src.reranking import LLMReranker
 
 _log = logging.getLogger(__name__)
 
 class BM25Retriever:
-    def __init__(self, bm25_db_dir: Path, documents_dir: Path):
+    def __init__(self, bm25_db_dir: Path, documents_dir: Path, index_name: str = "default"):
         # 初始化BM25检索器，指定BM25索引和文档目录
         self.bm25_db_dir = bm25_db_dir
         self.documents_dir = documents_dir
-        
-    def retrieve_by_company_name(self, company_name: str, query: str, top_n: int = 3, return_parent_pages: bool = False) -> List[Dict]:
-        # 按公司名检索相关文本块，返回BM25分数最高的top_n个块
-        document_path = None
+        self.index_name = index_name
+        self._pages_by_sha1 = self._load_pages_mapping()
+
+    def _load_pages_mapping(self) -> dict[str, dict[int, str]]:
+        """遍历 documents_dir 下所有 JSON，建立 sha1 -> {page_num: page_text} 映射。"""
+        mapping: dict[str, dict[int, str]] = {}
         for path in self.documents_dir.glob("*.json"):
-            with open(path, 'r', encoding='utf-8') as f:
-                doc = json.load(f)
-                if doc["metainfo"]["company_name"] == company_name:
-                    document_path = path
-                    document = doc
-                    break
-        if document_path is None:
-            raise ValueError(f"No report found with '{company_name}' company name.")
-        # 加载对应的BM25索引，文件名用 sha1
-        bm25_path = self.bm25_db_dir / f"{document['metainfo']['sha1']}.pkl"
-        with open(bm25_path, 'rb') as f:
-            bm25_index = pickle.load(f)
-            
-        # 获取文档内容和BM25索引
-        document = document
-        chunks = document["content"]["chunks"]
-        pages = document["content"]["pages"]
-        
-        # 计算BM25分数
-        tokenized_query = query.split()
-        scores = bm25_index.get_scores(tokenized_query)
-        
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    doc = json.load(f)
+            except Exception:
+                continue
+            sha1 = doc.get("metainfo", {}).get("sha1", "")
+            if not sha1:
+                continue
+            pages = doc.get("content", {}).get("pages", [])
+            mapping[sha1] = {p["page"]: p["text"] for p in pages if "page" in p}
+        return mapping
+
+    def _get_page_text(self, sha1: str, page: int, fallback: str = "") -> str:
+        """根据 sha1 和 page 号获取整页内容；找不到时回退到 fallback。"""
+        return self._pages_by_sha1.get(sha1, {}).get(page, fallback)
+
+    def retrieve(
+        self,
+        query: str,
+        top_n: int = 3,
+        return_parent_pages: bool = False,
+    ) -> List[Dict]:
+        """在全局BM25索引中检索与query最相关的文本块。
+
+        参数：
+            query: 查询文本
+            top_n: 返回结果数量上限
+            return_parent_pages: 为True时按(文档,页码)去重，返回整页内容
+
+        返回：
+            包含distance、page、text的字典列表
+        """
+        ingestor = BM25Ingestor()
+        scores, metadatas, texts = ingestor.search(
+            query=query,
+            index_name=self.index_name,
+            output_dir=self.bm25_db_dir,
+        )
+
         actual_top_n = min(top_n, len(scores))
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:actual_top_n]
-        
+
         retrieval_results = []
-        seen_pages = set()
-        
-        for index in top_indices:
-            score = round(float(scores[index]), 4)
-            chunk = chunks[index]
-            parent_page = next(page for page in pages if page["page"] == chunk["page"])
-            
+        seen_keys = set()
+
+        for idx in top_indices:
+            score = round(float(scores[idx]), 4)
+            meta = metadatas[idx]
+            chunk_text = texts[idx] if idx < len(texts) else ""
+            page = meta.get("page", 0)
+            sha1 = meta.get("sha1", "")
+
             if return_parent_pages:
-                if parent_page["page"] not in seen_pages:
-                    seen_pages.add(parent_page["page"])
-                    result = {
+                key = (sha1, page)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    page_text = self._get_page_text(sha1, page, fallback=chunk_text)
+                    retrieval_results.append({
                         "distance": score,
-                        "page": parent_page["page"],
-                        "text": parent_page["text"]
-                    }
-                    retrieval_results.append(result)
+                        "page": page,
+                        "text": page_text,
+                    })
             else:
-                result = {
+                retrieval_results.append({
                     "distance": score,
-                    "page": chunk["page"],
-                    "text": chunk["text"]
-                }
-                retrieval_results.append(result)
-        
+                    "page": page,
+                    "text": chunk_text,
+                })
+
         return retrieval_results
 
 
 
 class VectorRetriever:
-    def __init__(self, vector_db_dir: Path, documents_dir: Path, embedding_provider: str = "dashscope"):
-        # 初始化向量检索器，加载所有向量库和文档
+    def __init__(self, vector_db_dir: Path, documents_dir: Path, index_name: str = "default"):
         self.vector_db_dir = vector_db_dir
         self.documents_dir = documents_dir
-        self.all_dbs = self._load_dbs()
-        # 默认使用 dashscope 作为 embedding provider
-        self.embedding_provider = embedding_provider.lower()
-        self.llm = self._set_up_llm()
+        self.index_name = index_name
+        self._vectorstore = self._load_vectorstore()
+        self._pages_by_sha1 = self._load_pages_mapping()
 
-    def _set_up_llm(self):
-        # 根据 embedding_provider 初始化对应的 LLM 客户端
-        load_dotenv()
-        if self.embedding_provider == "openai":
-            llm = OpenAI(
-                api_key=os.getenv("OPENAI_API_KEY"),
-                timeout=None,
-                max_retries=2
-            )
-            return llm
-        elif self.embedding_provider == "dashscope":
-            import dashscope
-            dashscope.api_key = os.getenv("DASHSCOPE_API_KEY")
-            return None  # dashscope 不需要 client 对象
-        else:
-            raise ValueError(f"不支持的 embedding provider: {self.embedding_provider}")
+    def _load_vectorstore(self):
+        from langchain_chroma import Chroma
+        from src.openai_embedding import get_openai_embedding
+        return Chroma(
+            persist_directory=str(self.vector_db_dir),
+            embedding_function=get_openai_embedding(),
+            collection_name=self.index_name,
+        )
 
-    def _get_embedding(self, text: str):
-        # 根据 embedding_provider 获取文本的向量表示
-        if self.embedding_provider == "openai":
-            embedding = self.llm.embeddings.create(
-                input=text,
-                model="text-embedding-3-large"
-            )
-            return embedding.data[0].embedding
-        elif self.embedding_provider == "dashscope":
-            import dashscope
-            rsp = dashscope.TextEmbedding.call(
-                model="text-embedding-v1",
-                input=[text]
-            )
-            # 兼容 dashscope 返回格式，不能用 resp.output，需用 resp['output']
-            if 'output' in rsp and 'embeddings' in rsp['output']:
-                # 多条输入（本处只有一条）
-                emb = rsp['output']['embeddings'][0]
-                if emb['embedding'] is None or len(emb['embedding']) == 0:
-                    raise RuntimeError(f"DashScope返回的embedding为空，text_index={emb.get('text_index', None)}")
-                return emb['embedding']
-            elif 'output' in rsp and 'embedding' in rsp['output']:
-                # 兼容单条输入格式
-                if rsp['output']['embedding'] is None or len(rsp['output']['embedding']) == 0:
-                    raise RuntimeError("DashScope返回的embedding为空")
-                return rsp['output']['embedding']
+    def _load_pages_mapping(self) -> dict[str, dict[int, str]]:
+        mapping: dict[str, dict[int, str]] = {}
+        for path in self.documents_dir.glob("*.json"):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    doc = json.load(f)
+            except Exception:
+                continue
+            sha1 = doc.get("metainfo", {}).get("sha1", "")
+            if not sha1:
+                continue
+            pages = doc.get("content", {}).get("pages", [])
+            mapping[sha1] = {p["page"]: p["text"] for p in pages if "page" in p}
+        return mapping
+
+    def _get_page_text(self, sha1: str, page: int, fallback: str = "") -> str:
+        return self._pages_by_sha1.get(sha1, {}).get(page, fallback)
+
+    def _find_report_by_company(self, company_name: str) -> dict:
+        for path in self.documents_dir.glob("*.json"):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    doc = json.load(f)
+            except Exception:
+                continue
+            metainfo = doc.get("metainfo", {})
+            if metainfo.get("company_name") == company_name:
+                return doc
+            elif company_name in metainfo.get("file_name", ""):
+                return doc
+        raise ValueError(f"No report found with '{company_name}' company name.")
+
+    def retrieve(
+        self,
+        company_name: str,
+        query: str,
+        llm_reranking_sample_size: int = None,  # 占位，兼容 HybridRetriever 调用
+        top_n: int = 3,
+        return_parent_pages: bool = False,
+    ) -> List[Dict]:
+        """在全局 ChromaDB 向量库中按公司名过滤检索与 query 最相关的文本块。
+
+        参数：
+            company_name: 目标公司名称，用于 ChromaDB metadata 过滤
+            query: 查询文本
+            llm_reranking_sample_size: 占位参数，当前未使用
+            top_n: 返回结果数量上限
+            return_parent_pages: 为True时按(文档,页码)去重，返回整页内容
+
+        返回：
+            包含distance、page、text的字典列表
+        """
+        search_kwargs = {"k": top_n}
+        if company_name:
+            search_kwargs["filter"] = {"company_name": company_name}
+
+        docs_with_scores = self._vectorstore.similarity_search_with_score(
+            query,
+            **search_kwargs,
+        )
+
+        retrieval_results = []
+        seen_keys = set()
+
+        for doc, score in docs_with_scores:
+            score = round(float(score), 4)
+            meta = doc.metadata
+            chunk_text = doc.page_content
+            page = meta.get("page", 0)
+            sha1 = meta.get("sha1", "")
+
+            if return_parent_pages:
+                key = (sha1, page)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    page_text = self._get_page_text(sha1, page, fallback=chunk_text)
+                    retrieval_results.append({
+                        "distance": score,
+                        "page": page,
+                        "text": page_text,
+                    })
             else:
-                raise RuntimeError(f"DashScope embedding API返回格式异常: {rsp}")
-        else:
-            raise ValueError(f"不支持的 embedding provider: {self.embedding_provider}")
+                retrieval_results.append({
+                    "distance": score,
+                    "page": page,
+                    "text": chunk_text,
+                })
+
+        return retrieval_results
 
     @staticmethod
     def set_up_llm():
@@ -149,39 +223,6 @@ class VectorRetriever:
         )
         return llm
 
-    def _load_dbs(self):
-        # 加载所有向量库和对应文档，建立映射
-        all_dbs = []
-        all_documents_paths = list(self.documents_dir.glob('*.json'))
-        for document_path in all_documents_paths:
-            try:
-                with open(document_path, 'r', encoding='utf-8') as f:
-                    document = json.load(f)
-            except Exception as e:
-                _log.error(f"Error loading JSON from {document_path.name}: {e}")
-                continue
-            # 用 metainfo['sha1'] 拼接 faiss 文件名
-            sha1 = document.get('metainfo', {}).get('sha1', None)
-            if not sha1:
-                _log.warning(f"No sha1 found in metainfo for document {document_path.name}")
-                continue
-            faiss_path = self.vector_db_dir / f"{sha1}.faiss"
-            if not faiss_path.exists():
-                _log.warning(f"No matching vector DB found for document {document_path.name} (sha1={sha1})")
-                continue
-            try:
-                vector_db = faiss.read_index(str(faiss_path))
-            except Exception as e:
-                _log.error(f"Error reading vector DB for {document_path.name}: {e}")
-                continue
-            report = {
-                "name": sha1,
-                "vector_db": vector_db,
-                "document": document
-            }
-            all_dbs.append(report)
-        return all_dbs
-
     @staticmethod
     def get_strings_cosine_similarity(str1, str2):
         # 计算两个字符串的余弦相似度（通过嵌入）
@@ -193,102 +234,13 @@ class VectorRetriever:
         similarity_score = round(similarity_score, 4)
         return similarity_score
 
-    def retrieve_by_company_name(self, company_name: str, query: str, llm_reranking_sample_size: int = None, top_n: int = 3, return_parent_pages: bool = False) -> List[Tuple[str, float]]:
-        # 按公司名检索相关文本块，返回向量距离最近的top_n个块
-        # 直接遍历所有分段 JSON，找到 company_name 匹配的文档
-        target_report = None
-        for report in self.all_dbs:
-            document = report.get("document", {})
-            metainfo = document.get("metainfo", {})
-            # 优先 company_name 字段匹配，否则 fallback 到 sha1 包含关系
-            if metainfo.get("company_name") == company_name:
-                target_report = report
-                break
-            elif company_name in metainfo.get("file_name", ""):
-                target_report = report
-                break
-        if target_report is None:
-            _log.error(f"No report found with '{company_name}' company name.")
-            raise ValueError(f"No report found with '{company_name}' company name.")
-        # 取 sha1，直接查找 faiss 文件（不再用 sha1_name，也不做 md5 编码）
-        sha1 = target_report["document"]["metainfo"].get("sha1")
-        if not sha1:
-            raise ValueError(f"No sha1 found in metainfo for company '{company_name}'")
-        faiss_path = self.vector_db_dir / f"{sha1}.faiss"
-        if not faiss_path.exists():
-            raise ValueError(f"No vector DB found for '{company_name}' (sha1: {sha1})")
-        document = target_report["document"]
-        vector_db = target_report["vector_db"]
-        chunks = document["content"]["chunks"]
-        pages = document["content"].get("pages", [])
-        actual_top_n = min(top_n, len(chunks))
-        # 获取 query 的 embedding，支持 openai/dashscope
-        embedding = self._get_embedding(query)
-        embedding_array = np.array(embedding, dtype=np.float32).reshape(1, -1)
-        distances, indices = vector_db.search(x=embedding_array, k=actual_top_n)
-        retrieval_results = []
-        seen_pages = set()
-        for distance, index in zip(distances[0], indices[0]):
-            distance = round(float(distance), 4)
-            chunk = chunks[index]
-            parent_page = None
-            if pages:
-                parent_page = next((page for page in pages if page["page"] == chunk.get("page")), None)
-            if return_parent_pages and parent_page:
-                if parent_page["page"] not in seen_pages:
-                    seen_pages.add(parent_page["page"])
-                    result = {
-                        "distance": distance,
-                        "page": parent_page["page"],
-                        "text": parent_page["text"]
-                    }
-                    retrieval_results.append(result)
-            else:
-                result = {
-                    "distance": distance,
-                    "page": chunk.get("page", 0),
-                    "text": chunk["text"]
-                }
-                retrieval_results.append(result)
-        return retrieval_results
-
-    def retrieve_all(self, company_name: str) -> List[Dict]:
-        # 检索公司所有文本块，返回全部内容
-        target_report = None
-        for report in self.all_dbs:
-            document = report.get("document", {})
-            metainfo = document.get("metainfo")
-            if not metainfo:
-                continue
-            if metainfo.get("company_name") == company_name:
-                target_report = report
-                break
-        
-        if target_report is None:
-            _log.error(f"No report found with '{company_name}' company name.")
-            raise ValueError(f"No report found with '{company_name}' company name.")
-        
-        document = target_report["document"]
-        pages = document["content"]["pages"]
-        
-        all_pages = []
-        for page in sorted(pages, key=lambda p: p["page"]):
-            result = {
-                "distance": 0.5,
-                "page": page["page"],
-                "text": page["text"]
-            }
-            all_pages.append(result)
-            
-        return all_pages
-
 
 class HybridRetriever:
     def __init__(self, vector_db_dir: Path, documents_dir: Path):
         self.vector_retriever = VectorRetriever(vector_db_dir, documents_dir)
         self.reranker = LLMReranker()
         
-    def retrieve_by_company_name(
+    def retrieve(
         self, 
         company_name: str, 
         query: str, 
@@ -316,7 +268,7 @@ class HybridRetriever:
         t0 = time.time()
         # 首先用向量检索器获取初步结果
         print("[计时] [HybridRetriever] 开始向量检索 ...")
-        vector_results = self.vector_retriever.retrieve_by_company_name(
+        vector_results = self.vector_retriever.retrieve(
             company_name=company_name,
             query=query,
             top_n=llm_reranking_sample_size,
@@ -336,3 +288,91 @@ class HybridRetriever:
         print(f"[计时] [HybridRetriever] LLM重排耗时: {t2-t1:.2f} 秒")
         print(f"[计时] [HybridRetriever] 总耗时: {t2-t0:.2f} 秒")
         return reranked_results[:top_n]
+
+
+if __name__ == "__main__":
+    """
+    本地调试入口：对现有索引进行检索并打印结果。
+    用法：python src/retrieval.py
+    """
+    import sys
+    from pathlib import Path
+
+    ROOT = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(ROOT))
+
+    DB_ROOT = ROOT / "data" / "stock_data" / "databases"
+    REPORTS_DIR = DB_ROOT / "chunked_reports"
+    BM25_DIR = DB_ROOT / "bm25_dbs"
+    VECTOR_DIR = DB_ROOT / "vector_dbs"
+
+    TEST_COMPANY = "中芯国际集成电路制造有限公司"
+    TEST_QUERY = "营业收入"
+
+    print("=" * 60)
+    print("BM25 检索测试")
+    print("=" * 60)
+    if (BM25_DIR / "default.pkl").exists():
+        bm25_retriever = BM25Retriever(
+            bm25_db_dir=BM25_DIR,
+            documents_dir=REPORTS_DIR,
+            index_name="default",
+        )
+        bm25_results = bm25_retriever.retrieve(
+            query=TEST_QUERY,
+            top_n=3,
+            return_parent_pages=True,
+        )
+        for i, r in enumerate(bm25_results, 1):
+            print(f"\n[{i}] distance={r['distance']}  page={r['page']}")
+            print(r["text"][:300] + "...")
+    else:
+        print(f"BM25 索引不存在: {BM25_DIR / 'default.pkl'}")
+
+    print("\n" + "=" * 60)
+    print("向量检索测试")
+    print("=" * 60)
+    try:
+        if (VECTOR_DIR / "chroma.sqlite3").exists():
+            vector_retriever = VectorRetriever(
+                vector_db_dir=VECTOR_DIR,
+                documents_dir=REPORTS_DIR,
+                index_name="default",
+            )
+            vector_results = vector_retriever.retrieve(
+                company_name=TEST_COMPANY,
+                query=TEST_QUERY,
+                top_n=3,
+                return_parent_pages=True,
+            )
+            for i, r in enumerate(vector_results, 1):
+                print(f"\n[{i}] distance={r['distance']}  page={r['page']}")
+                print(r["text"][:300] + "...")
+        else:
+            print(f"ChromaDB 不存在: {VECTOR_DIR}")
+    except Exception as e:
+        print(f"向量检索失败: {e}")
+
+    print("\n" + "=" * 60)
+    print("混合检索测试")
+    print("=" * 60)
+    try:
+        if (VECTOR_DIR / "chroma.sqlite3").exists():
+            hybrid_retriever = HybridRetriever(
+                vector_db_dir=VECTOR_DIR,
+                documents_dir=REPORTS_DIR,
+            )
+            hybrid_results = hybrid_retriever.retrieve(
+                company_name=TEST_COMPANY,
+                query=TEST_QUERY,
+                top_n=3,
+                return_parent_pages=True,
+            )
+            for i, r in enumerate(hybrid_results, 1):
+                print(f"\n[{i}] distance={r.get('distance', 'N/A')}  page={r['page']}")
+                print(r["text"][:300] + "...")
+        else:
+            print(f"ChromaDB 不存在: {VECTOR_DIR}")
+    except Exception as e:
+        print(f"混合检索失败: {e}")
+    

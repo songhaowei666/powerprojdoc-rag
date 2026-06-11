@@ -126,6 +126,23 @@ class QuestionsProcessor:
         
         return validated_pages
 
+    def _load_all_pages(self, company_name: str) -> List[Dict]:
+        """遍历 documents_dir，找到匹配 company_name 的报告并返回所有页面。"""
+        for path in Path(self.documents_dir).glob("*.json"):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    doc = json.load(f)
+            except Exception:
+                continue
+            metainfo = doc.get("metainfo", {})
+            if metainfo.get("company_name") == company_name or company_name in metainfo.get("file_name", ""):
+                pages = doc.get("content", {}).get("pages", [])
+                return [
+                    {"distance": 0.5, "page": p["page"], "text": p["text"]}
+                    for p in sorted(pages, key=lambda p: p["page"])
+                ]
+        raise ValueError(f"No report found with '{company_name}' company name")
+
     def get_answer_for_company(self, company_name: str, question: str, schema: str) -> dict:
         # 针对单个公司，检索上下文并调用LLM生成答案
         t0 = time.time()
@@ -142,10 +159,10 @@ class QuestionsProcessor:
         t1 = time.time()
         print(f"[计时] [get_answer_for_company] 检索器初始化耗时: {t1-t0:.2f} 秒")
         if self.full_context:
-            retrieval_results = retriever.retrieve_all(company_name)
+            retrieval_results = self._load_all_pages(company_name)
         else:           
             t2 = time.time()
-            retrieval_results = retriever.retrieve_by_company_name(
+            retrieval_results = retriever.retrieve(
                 company_name=company_name,
                 query=question,
                 llm_reranking_sample_size=self.llm_reranking_sample_size,
