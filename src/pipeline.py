@@ -174,7 +174,7 @@ class Pipeline:
         input_dir = self.config.documents_dir
         output_dir = self.config.vector_db_dir
         
-        from openai_embedding import get_openai_embedding
+        from src.openai_embedding import get_openai_embedding
         vdb_ingestor = VectorDBIngestor(embedder=get_openai_embedding())
         vdb_ingestor.process_reports(input_dir, output_dir)
         print(f"Vector databases created in {output_dir}")
@@ -328,11 +328,15 @@ if __name__ == "__main__":
     # print('从分块报告创建向量数据库，输出到 databases/vector_dbs')
     # pipeline.create_vector_dbs()     
 
-    print('向量检索')
-    print(pipeline.vector_retrieve(query="工程总投资",return_parent_pages=True))
+    # print('向量检索')
+    # print(pipeline.vector_retrieve(query="工程总投资",return_parent_pages=True))
 
     # print("bm25关键词构建-------")
     # pipeline.create_bm25_db()
+
+
+    print(pipeline.bm25_retrieve(query="工程总投资", top_n=5, return_parent_pages=True))
+
 
     # print('向量检索')
     # pipeline.vector_retrieve(query="工程总投资")

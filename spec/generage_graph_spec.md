@@ -21,6 +21,7 @@
 | 答案相关性自检 | 使用 LLM 评分器判断生成内容是否回答用户问题 |
 | 查询改写 | 当答案未回答问题或存在幻觉时，自动改写查询后重试 |
 | 有限重试 | 最多 3 次生成尝试，避免无限循环 |
+| 直接生成开关 | `is_direct_generate=True` 时跳过评估与重试，便于对比测试 |
 | 接受外部文档 | 输入为 `List[Document]`，与检索模块解耦 |
 
 ---
@@ -28,24 +29,27 @@
 ## 3. 架构设计
 
 ```
-┌─────────┐     ┌──────────┐     ┌─────────────────────────────────┐
-│  START  │────→│ generate │────→│ grade_generation_v_documents_   │
-└─────────┘     └──────────┘     │ and_question                    │
-                                 └─────────────┬───────────────────┘
-                                               │
-              ┌────────────────────────────────┼────────────────────────────────┐
-              │ 基于文档且回答                 │ 未回答问题                     │ 不基于文档
-              │ 问题                           │                                │
-              ▼                                ▼                                │
-             END                         transform_query ◄─────────────────────┘
-                                              │
-                                              ▼
-                                      should_continue
-                                              │
-                          ┌───────────────────┴───────────────────┐
-                          │ 尝试次数 < 3                            │ 尝试次数 >= 3
-                          ▼                                       ▼
-                       generate                                   END
+┌─────────┐     ┌──────────┐     route_after_generate
+│  START  │────→│ generate │────┬──────────────────────────────→ END（is_direct_generate=True）
+└─────────┘     └──────────┘    │
+                                │ grade
+                                ▼
+                        ┌─────────────────┐     ┌──────────────────┐
+                        │ grade_generation │────→│ route_after_grade │
+                        └─────────────────┘     └────────┬─────────┘
+                                                         │
+              ┌──────────────────────────────────────────┼──────────────┐
+              │ 基于文档且回答问题                          │ 未回答问题    │ 不基于文档
+              ▼                                          ▼              │
+             END                                   transform_query ◄────┘
+                                                         │
+                                                         ▼
+                                                 should_continue
+                                                         │
+                                     ┌───────────────────┴───────────────────┐
+                                     │ 尝试次数 < 3                            │ 尝试次数 >= 3
+                                     ▼                                       ▼
+                                  generate                                   END
 ```
 
 ---
@@ -58,6 +62,9 @@ class GraphState(TypedDict):
     documents: List[Document]
     generation: str
     generation_attempts: int
+    is_grounded_in_docs: bool
+    is_question_answered: bool
+    is_direct_generate: bool
 ```
 
 | 字段 | 类型 | 说明 |
@@ -66,6 +73,9 @@ class GraphState(TypedDict):
 | `documents` | `List[Document]` | 检索到的文档列表，作为生成上下文 |
 | `generation` | `str` | LLM 生成的答案 |
 | `generation_attempts` | `int` | 已执行的生成尝试次数 |
+| `is_grounded_in_docs` | `bool` | 当前/最终生成是否基于检索文档；直接生成模式下未评估，恒为 `False` |
+| `is_question_answered` | `bool` | 当前/最终生成是否回答了用户问题；直接生成模式下未评估，恒为 `False` |
+| `is_direct_generate` | `bool` | 为 `True` 时跳过质量评估与重试，生成一次后直接结束 |
 
 ---
 
@@ -81,7 +91,16 @@ class GraphState(TypedDict):
   - `context` 由 `format_docs(documents)` 拼接而成
   - 使用 `APIProcessor(provider="openai")` 发送非结构化生成请求
 
-### 5.2 transform_query
+### 5.2 grade_generation
+
+- **职责**：对生成内容进行幻觉检测与答案相关性评分，并将结果写入 state
+- **输入**：`question`, `documents`, `generation`
+- **输出**：`is_grounded_in_docs`, `is_question_answered`
+- **实现要点**：
+  - 先调用 `GenerationGrader.check_hallucination`
+  - 仅当基于文档时，再调用 `GenerationGrader.check_answer`
+
+### 5.3 transform_query
 
 - **职责**：使用 LLM 改写用户问题以改进生成效果
 - **输入**：`question`
@@ -92,18 +111,23 @@ class GraphState(TypedDict):
 
 ## 6. 条件边定义
 
-### 6.1 grade_generation_v_documents_and_question
+### 6.1 route_after_generate
 
-- **职责**：评估生成内容是否基于文档并回答问题
+- **职责**：生成后根据 `is_direct_generate` 决定是否进入质量评估
 - **规则**：
-  1. 先调用幻觉评分器 `GradeHallucinations`
-     - 输出 `binary_score == "yes"` → 继续评估答案相关性
-     - 输出 `binary_score == "no"` → 若 `generation_attempts >= 2` 返回 `"not useful"`，否则返回 `"not supported"`
-  2. 再调用答案评分器 `GradeAnswer`
-     - 输出 `binary_score == "yes"` → `"useful"`
-     - 输出 `binary_score == "no"` → `"not useful"`
+  - `is_direct_generate == True` → `"end"`，跳过 `grade_generation`
+  - `is_direct_generate == False` → `"grade"`，进入 `grade_generation`
 
-### 6.2 should_continue
+### 6.2 route_after_grade
+
+- **职责**：根据 `is_grounded_in_docs`、`is_question_answered` 与尝试次数决定下一步
+- **规则**：
+  1. `is_grounded_in_docs == True` 且 `is_question_answered == True` → `"useful"`
+  2. `is_grounded_in_docs == False` 且 `generation_attempts >= 2` → `"not useful"`
+  3. `is_grounded_in_docs == False` 且 `generation_attempts < 2` → `"not supported"`
+  4. `is_grounded_in_docs == True` 且 `is_question_answered == False` → `"not useful"`
+
+### 6.3 should_continue
 
 - **职责**：防止在 transform_query 后无限循环
 - **规则**：
@@ -191,10 +215,18 @@ inputs = {
     ],
     "generation": "",
     "generation_attempts": 0,
+    "is_grounded_in_docs": False,
+    "is_question_answered": False,
+    "is_direct_generate": False,
 }
 
 final_state = app.invoke(inputs)
 print(final_state["generation"])
+
+# 直接生成模式（跳过评估，用于对比测试）
+direct_inputs = {**inputs, "is_direct_generate": True}
+direct_state = app.invoke(direct_inputs)
+print(direct_state["generation"])
 ```
 
 ---
@@ -203,12 +235,14 @@ print(final_state["generation"])
 
 | 场景 | 行为 |
 |------|------|
+| `is_direct_generate=True` | 仅执行一次 `generate` 后结束；不调用评分器；`is_grounded_in_docs` 与 `is_question_answered` 保持 `False` |
 | 首次生成即通过幻觉与答案评分 | 直接返回答案 |
 | 生成内容存在幻觉且尝试次数 < 2 | 回到 `generate` 重新生成 |
 | 生成内容存在幻觉且尝试次数 >= 2 | 进入 `transform_query` 改写查询 |
 | 生成内容回答了问题但无关 | 进入 `transform_query` 改写查询 |
-| 达到最大尝试次数（3 次） | 直接返回当前生成结果 |
-| `documents` 为空列表 | 生成器将基于空上下文生成，通常返回"无法回答" |
+| 达到最大尝试次数（3 次） | 直接返回当前生成结果，标识字段反映最后一次评分结果 |
+| 正常结束 | `is_grounded_in_docs=True` 且 `is_question_answered=True` |
+| `documents` 为空列表 | 生成器将基于空上下文生成，通常 `is_grounded_in_docs=False` |
 
 ---
 
@@ -217,3 +251,5 @@ print(final_state["generation"])
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v1.0 | 2026-06-11 | 初始版本；基于 Self-RAG 生成侧实现，支持生成、幻觉检测、答案评分、查询改写与有限重试 |
+| v1.1 | 2026-06-12 | 新增 `is_grounded_in_docs`、`is_question_answered` 状态标识；评分逻辑拆分为独立节点 |
+| v1.2 | 2026-06-12 | 新增 `is_direct_generate` 开关，支持跳过质量评估的直接生成模式 |

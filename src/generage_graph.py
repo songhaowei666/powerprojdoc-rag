@@ -10,6 +10,9 @@
         "documents": List[Document],
         "generation": "",
         "generation_attempts": 0,
+        "is_grounded_in_docs": False,
+        "is_question_answered": False,
+        "is_direct_generate": False,
     }
 
 输出：
@@ -18,9 +21,13 @@
         "documents": List[Document],
         "generation": str,
         "generation_attempts": int,
+        "is_grounded_in_docs": bool,
+        "is_question_answered": bool,
+        "is_direct_generate": bool,
     }
 
 注意：本模块不执行检索，文档列表由上游模块（如 retrieval_graph）提供。
+当 `is_direct_generate=True` 时，仅基于文档生成一次并返回，跳过质量评估与重试。
 """
 
 import sys
@@ -54,12 +61,18 @@ class GraphState(TypedDict):
         documents: 检索到的文档列表
         generation: LLM 生成内容
         generation_attempts: 已执行的生成尝试次数
+        is_grounded_in_docs: 最终生成是否基于检索文档（直接生成模式下未评估，恒为 False）
+        is_question_answered: 最终生成是否回答了用户问题（直接生成模式下未评估，恒为 False）
+        is_direct_generate: 是否跳过质量评估，直接基于文档生成并返回
     """
 
     question: str
     documents: List[Document]
     generation: str
     generation_attempts: int
+    is_grounded_in_docs: bool
+    is_question_answered: bool
+    is_direct_generate: bool
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +294,43 @@ def transform_query(state: GraphState) -> dict:
 # ---------------------------------------------------------------------------
 # 条件边函数
 # ---------------------------------------------------------------------------
-def grade_generation_v_documents_and_question(state: GraphState) -> str:
+def grade_generation(state: GraphState) -> dict:
     """
-    判断生成内容是否基于文档并回答问题。
+    评估生成质量，并将结果写入 state 标识字段。
+
+    参数：
+        state: 当前图状态
+
+    返回：
+        is_grounded_in_docs、is_question_answered 的更新
+    """
+    print("---评估生成质量---")
+    question = state["question"]
+    documents = state["documents"]
+    generation = state["generation"]
+
+    is_grounded = _default_grader.check_hallucination(documents, generation) == "yes"
+    is_answered = False
+
+    if is_grounded:
+        print("---决策：生成内容基于文档---")
+        is_answered = _default_grader.check_answer(question, generation) == "yes"
+        if is_answered:
+            print("---决策：生成内容回答了问题---")
+        else:
+            print("---决策：生成内容未回答问题---")
+    else:
+        print("---决策：生成内容未基于文档---")
+
+    return {
+        "is_grounded_in_docs": is_grounded,
+        "is_question_answered": is_answered,
+    }
+
+
+def route_after_grade(state: GraphState) -> str:
+    """
+    根据评分标识与尝试次数决定下一步。
 
     参数：
         state: 当前图状态
@@ -291,33 +338,37 @@ def grade_generation_v_documents_and_question(state: GraphState) -> str:
     返回：
         下一个节点的决策："useful" / "not useful" / "not supported"
     """
-    print("---评估生成质量---")
-    question = state["question"]
-    documents = state["documents"]
-    generation = state["generation"]
+    is_grounded = state["is_grounded_in_docs"]
+    is_answered = state["is_question_answered"]
     attempts = state.get("generation_attempts", 0)
 
-    # 1. 幻觉检测
-    grade = _default_grader.check_hallucination(documents, generation)
+    if is_grounded and is_answered:
+        return "useful"
 
-    if grade == "yes":
-        print("---决策：生成内容基于文档---")
+    if not is_grounded:
+        print("---决策：生成内容未基于文档，重试---")
+        if attempts >= 2:
+            return "not useful"
+        return "not supported"
 
-        # 2. 答案相关性检测
-        grade = _default_grader.check_answer(question, generation)
+    print("---决策：生成内容未回答问题，改写查询---")
+    return "not useful"
 
-        if grade == "yes":
-            print("---决策：生成内容回答了问题---")
-            return "useful"
-        print("---决策：生成内容未回答问题---")
-        return "not useful"
 
-    print("---决策：生成内容未基于文档，重试---")
+def route_after_generate(state: GraphState) -> str:
+    """
+    生成后决定进入质量评估还是直接结束。
 
-    # 如果已经连续多次生成均出现幻觉，改为走查询改写分支，避免原地死循环
-    if attempts >= 2:
-        return "not useful"
-    return "not supported"
+    参数：
+        state: 当前图状态
+
+    返回：
+        "grade" 或 "end"
+    """
+    if state.get("is_direct_generate", False):
+        print("---直接生成模式：跳过质量评估---")
+        return "end"
+    return "grade"
 
 
 def should_continue(state: GraphState) -> str:
@@ -343,12 +394,21 @@ def should_continue(state: GraphState) -> str:
 workflow = StateGraph(GraphState)
 
 workflow.add_node("generate", generate)
+workflow.add_node("grade_generation", grade_generation)
 workflow.add_node("transform_query", transform_query)
 
 workflow.add_edge(START, "generate")
 workflow.add_conditional_edges(
     "generate",
-    grade_generation_v_documents_and_question,
+    route_after_generate,
+    {
+        "end": END,
+        "grade": "grade_generation",
+    },
+)
+workflow.add_conditional_edges(
+    "grade_generation",
+    route_after_grade,
     {
         "not supported": "generate",
         "useful": END,
@@ -371,9 +431,16 @@ app = workflow.compile()
 # 本地调试入口
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    from pprint import pprint
+    import argparse
 
-    # 示例：使用空/占位文档列表演示图结构
+    parser = argparse.ArgumentParser(description="生成工作流本地调试")
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="直接基于文档生成，跳过质量评估与重试",
+    )
+    args = parser.parse_args()
+
     docs = [
         Document(
             page_content="中芯国际 2024 年营业收入为 577.96 亿元，同比增长 27.0%。",
@@ -386,15 +453,16 @@ if __name__ == "__main__":
         "documents": docs,
         "generation": "",
         "generation_attempts": 0,
+        "is_grounded_in_docs": False,
+        "is_question_answered": False,
+        "is_direct_generate": True,
     }
 
-    final_state = None
-    for output in app.stream(inputs):
-        for key, value in output.items():
-            pprint(f"节点 '{key}' 完成")
-            final_state = value
-        pprint("---")
+    final_state = app.invoke(inputs)
 
-    if final_state:
-        print("\n最终生成答案：")
-        print(final_state.get("generation", "N/A"))
+    print("\n最终生成答案：")
+    print(final_state.get("generation", "N/A"))
+    print(f"直接生成模式: {final_state.get('is_direct_generate')}")
+    if not final_state.get("is_direct_generate"):
+        print(f"基于文档: {final_state.get('is_grounded_in_docs')}")
+        print(f"回答问题: {final_state.get('is_question_answered')}")

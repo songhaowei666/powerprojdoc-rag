@@ -22,16 +22,18 @@ class GraphState(TypedDict):
     表示图的状态
     属性：
         question：用户的问题
-        company_name：目标公司名称
+        company_code：目标公司编码
         documents：文档列表
         retrieval_attempts：检索尝试次数
-        has_relevant_docs：是否有相关文档
+        has_relevant_docs：是否有相关文档（直接检索模式下未评估，恒为 False）
+        is_direct_retrieve：是否跳过相关性评估，直接返回检索结果
     """
     question: str
-    company_name: str
+    company_code: str
     documents: List[Document]
     retrieval_attempts: int
     has_relevant_docs: bool
+    is_direct_retrieve: bool
 
 
 # 初始化混合检索器
@@ -88,11 +90,11 @@ def retrieve(state: GraphState) -> dict:
     """
     print("---检索---")
     question = state["question"]
-    company_name = state["company_name"]
+    company_code = state["company_code"]
     attempts = state.get("retrieval_attempts", 0)
 
     results = _hybrid_retriever.retrieve(
-        company_name=company_name,
+        company_code=company_code,
         query=question,
         top_n=6,
         return_parent_pages=True,
@@ -161,6 +163,21 @@ def transform_query(state: GraphState) -> dict:
     return {"question": better_question}
 
 
+def route_after_retrieve(state: GraphState) -> str:
+    """检索后决定进入相关性评估还是直接结束。
+
+    参数：
+        state: 当前图状态
+
+    返回：
+        "grade" 或 "end"
+    """
+    if state.get("is_direct_retrieve", False):
+        print("---直接检索模式：跳过相关性评估---")
+        return "end"
+    return "grade"
+
+
 def decide_next_step(state: GraphState) -> str:
     """基于当前状态决定下一步操作。
 
@@ -194,7 +211,14 @@ workflow.add_node("transform_query", transform_query)
 
 # 构建图的边（连接）
 workflow.add_edge(START, "retrieve")
-workflow.add_edge("retrieve", "grade_documents")
+workflow.add_conditional_edges(
+    "retrieve",
+    route_after_retrieve,
+    {
+        "end": END,
+        "grade": "grade_documents",
+    },
+)
 workflow.add_conditional_edges(
     "grade_documents",
     decide_next_step,
@@ -209,29 +233,31 @@ workflow.add_edge("transform_query", "retrieve")
 app = workflow.compile()
 
 if __name__ == "__main__":
+    import argparse
     from pprint import pprint
 
-    # 设置输入问题
+    parser = argparse.ArgumentParser(description="检索工作流本地调试")
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="直接返回混合检索结果，跳过相关性评估与重试",
+    )
+    args = parser.parse_args()
+
     inputs = {
-        "question": "中芯国际集成电路制造有限公司",
-        "company_name": "",
+        "question": "工程总投资是多少？",
+        "company_code": "001",
         "documents": [],
         "retrieval_attempts": 0,
         "has_relevant_docs": False,
+        "is_direct_retrieve": True,
     }
 
-    # 运行程序并处理输出
-    final_state = None
-    for output in app.stream(inputs):
-        for key, value in output.items():
-            pprint(f"节点 '{key}':")
-            final_state = value
+    final_state = app.invoke(inputs)
 
-        pprint("\n---\n")
-
-    # 输出最终返回的文档
     pprint("最终返回的文档：")
-    if final_state and final_state.get("documents"):
+    print(f"直接检索模式: {final_state.get('is_direct_retrieve')}")
+    if final_state.get("documents"):
         for i, doc in enumerate(final_state["documents"], 1):
             pprint(
                 f"\n[{i}] page={doc.metadata.get('page', 'N/A')} "

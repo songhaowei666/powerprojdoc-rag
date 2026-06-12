@@ -8,7 +8,7 @@
 
 `rag_app.py` 是项目的**最终 RAG 应用入口**，负责将检索工作流与生成工作流串联：
 
-1. 调用 `src.retrieval_graph.app` 根据问题与公司名检索相关文档；
+1. 调用 `src.retrieval_graph.app` 根据问题与公司编码检索相关文档；
 2. 调用 `src.generage_graph.app` 基于检索文档生成带自检的答案。
 
 本模块本身不实现具体的检索或生成算法，而是作为两个子图的编排层。
@@ -51,7 +51,13 @@ class RAGApp:
         retrieval_app=retrieval_app,
         generation_app=generation_app,
     )
-    def run(self, question: str, company_name: str = "") -> dict
+    def run(
+        self,
+        question: str,
+        company_code: str = "001",
+        is_direct_retrieve: bool = False,
+        is_direct_generate: bool = False,
+    ) -> dict
 ```
 
 | 方法 | 说明 |
@@ -62,7 +68,12 @@ class RAGApp:
 ### 4.2 run_rag
 
 ```python
-def run_rag(question: str, company_name: str = "") -> dict
+def run_rag(
+    question: str,
+    company_code: str = "001",
+    is_direct_retrieve: bool = False,
+    is_direct_generate: bool = False,
+) -> dict
 ```
 
 - 使用默认 `RAGApp` 实例执行查询
@@ -83,10 +94,11 @@ def run_rag(question: str, company_name: str = "") -> dict
 ```python
 {
     "question": question,
-    "company_name": company_name,
+    "company_code": company_code,
     "documents": [],
     "retrieval_attempts": 0,
     "has_relevant_docs": False,
+    "is_direct_retrieve": is_direct_retrieve,
 }
 ```
 
@@ -102,6 +114,9 @@ def run_rag(question: str, company_name: str = "") -> dict
     "documents": documents,
     "generation": "",
     "generation_attempts": 0,
+    "is_grounded_in_docs": False,
+    "is_question_answered": False,
+    "is_direct_generate": False,
 }
 ```
 
@@ -114,6 +129,11 @@ def run_rag(question: str, company_name: str = "") -> dict
     "question": str,
     "documents": List[Document],
     "generation": str,
+    "has_relevant_docs": bool,
+    "is_direct_retrieve": bool,
+    "is_grounded_in_docs": bool,
+    "is_question_answered": bool,
+    "is_direct_generate": bool,
 }
 ```
 
@@ -147,8 +167,8 @@ def run_rag(question: str, company_name: str = "") -> dict
 from src.rag_app import run_rag
 
 result = run_rag(
-    question="中芯国际2024年营业收入是多少？",
-    company_name="中芯国际集成电路制造有限公司",
+    question="工程总投资是多少？",
+    company_code="001",
 )
 print(result["generation"])
 ```
@@ -160,8 +180,8 @@ from src.rag_app import RAGApp
 
 app = RAGApp()
 result = app.run(
-    question="中芯国际2024年营业收入是多少？",
-    company_name="中芯国际集成电路制造有限公司",
+    question="工程总投资是多少？",
+    company_code="001",
 )
 print(result["generation"])
 ```
@@ -172,7 +192,7 @@ print(result["generation"])
 
 | 场景 | 行为 |
 |------|------|
-| `company_name` 为空 | 检索器不执行公司过滤，按全局检索 |
+| `company_code` 为空 | 检索器不执行公司过滤，按全局检索 |
 | 检索结果为空 | 继续调用生成图，生成图基于空上下文生成 |
 | 生成图为 None 或缺少 generation | 返回空字符串 |
 | 子图被替换为 mock | `RAGApp` 仍按相同状态约定调用 |
@@ -184,3 +204,7 @@ print(result["generation"])
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v1.0 | 2026-06-11 | 初始版本；串联 retrieval_graph 与 generage_graph，提供 RAGApp 与 run_rag 接口 |
+| v1.1 | 2026-06-12 | 检索入参由 `company_name` 改为 `company_code`，默认值 `"001"` |
+| v1.2 | 2026-06-12 | 返回结果增加 `is_grounded_in_docs`、`is_question_answered` |
+| v1.3 | 2026-06-12 | 支持 `is_direct_generate` 参数，透传至生成图以跳过质量评估 |
+| v1.4 | 2026-06-12 | 支持 `is_direct_retrieve` 参数，透传至检索图以跳过相关性评估 |

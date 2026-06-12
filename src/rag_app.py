@@ -2,15 +2,15 @@
 最终 RAG 应用入口。
 
 将 `src.retrieval_graph` 与 `src.generage_graph` 串联：
-1. 根据用户问题与公司名，通过 `retrieval_graph` 执行混合检索，召回相关文档；
+1. 根据用户问题与公司编码，通过 `retrieval_graph` 执行混合检索，召回相关文档；
 2. 将检索到的文档与用户问题传入 `generage_graph`，生成带自检的答案。
 
 用法：
     from src.rag_app import RAGApp, run_rag
 
     result = run_rag(
-        question="中芯国际2024年营业收入是多少？",
-        company_name="中芯国际集成电路制造有限公司",
+        question="工程总投资是多少？",
+        company_code="001",
     )
     print(result["generation"])
 """
@@ -47,19 +47,32 @@ class RAGApp:
         self.retrieval_app = retrieval_app
         self.generation_app = generation_app
 
-    def run(self, question: str, company_name: str = "") -> dict:
+    def run(
+        self,
+        question: str,
+        company_code: str = "001",
+        is_direct_retrieve: bool = False,
+        is_direct_generate: bool = False,
+    ) -> dict:
         """
         执行完整 RAG 流程。
 
         参数：
             question: 用户问题
-            company_name: 目标公司名称，用于检索过滤；为空时不按公司过滤
+            company_code: 目标公司编码，用于检索过滤；为空时不按公司过滤
+            is_direct_retrieve: 为 True 时跳过检索相关性评估，直接返回混合检索结果
+            is_direct_generate: 为 True 时跳过生成质量评估，直接基于文档返回答案
 
         返回：
             包含以下键的字典：
                 - question: 原始问题
                 - documents: 检索到的文档列表（List[Document]）
                 - generation: 最终生成的答案
+                - has_relevant_docs: 检索文档是否相关（直接检索模式下未评估）
+                - is_direct_retrieve: 是否使用了直接检索模式
+                - is_grounded_in_docs: 生成是否基于检索文档（直接生成模式下未评估）
+                - is_question_answered: 生成是否回答了用户问题（直接生成模式下未评估）
+                - is_direct_generate: 是否使用了直接生成模式
 
         异常：
             ValueError: question 为空时抛出
@@ -71,10 +84,11 @@ class RAGApp:
         # 1. 检索阶段
         retrieval_inputs = {
             "question": question,
-            "company_name": company_name,
+            "company_code": company_code,
             "documents": [],
             "retrieval_attempts": 0,
             "has_relevant_docs": False,
+            "is_direct_retrieve": is_direct_retrieve,
         }
 
         try:
@@ -95,6 +109,9 @@ class RAGApp:
             "documents": documents,
             "generation": "",
             "generation_attempts": 0,
+            "is_grounded_in_docs": False,
+            "is_question_answered": False,
+            "is_direct_generate": is_direct_generate,
         }
 
         try:
@@ -109,6 +126,15 @@ class RAGApp:
             "question": question,
             "documents": generation_state.get("documents", documents),
             "generation": generation_state.get("generation", ""),
+            "has_relevant_docs": retrieval_state.get("has_relevant_docs", False),
+            "is_direct_retrieve": retrieval_state.get(
+                "is_direct_retrieve", is_direct_retrieve
+            ),
+            "is_grounded_in_docs": generation_state.get("is_grounded_in_docs", False),
+            "is_question_answered": generation_state.get("is_question_answered", False),
+            "is_direct_generate": generation_state.get(
+                "is_direct_generate", is_direct_generate
+            ),
         }
 
 
@@ -116,26 +142,42 @@ class RAGApp:
 default_rag_app = RAGApp()
 
 
-def run_rag(question: str, company_name: str = "") -> dict:
+def run_rag(
+    question: str,
+    company_code: str = "001",
+    is_direct_retrieve: bool = False,
+    is_direct_generate: bool = False,
+) -> dict:
     """
     便捷函数：使用默认 RAG 应用执行查询。
 
     参数：
         question: 用户问题
-        company_name: 目标公司名称
+        company_code: 目标公司编码
+        is_direct_retrieve: 为 True 时跳过检索相关性评估
+        is_direct_generate: 为 True 时跳过生成质量评估
 
     返回：
         包含 question、documents、generation 的字典
     """
-    return default_rag_app.run(question, company_name)
+    return default_rag_app.run(
+        question,
+        company_code,
+        is_direct_retrieve=is_direct_retrieve,
+        is_direct_generate=is_direct_generate,
+    )
 
 
 if __name__ == "__main__":
     from pprint import pprint
 
     result = run_rag(
-        question="中芯国际2024年营业收入是多少？",
-        company_name="中芯国际集成电路制造有限公司",
+        question="工程总投资是多少？",
+        company_code="001",
+        is_direct_retrieve=True,
+        is_direct_generate=True,
     )
     print("\n最终答案：")
     print(result["generation"])
+    print(f"直接检索: {result.get('is_direct_retrieve')}")
+    print(f"直接生成: {result.get('is_direct_generate')}")
