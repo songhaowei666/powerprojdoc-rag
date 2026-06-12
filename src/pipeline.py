@@ -329,7 +329,7 @@ if __name__ == "__main__":
     # pipeline.create_vector_dbs()     
 
     print('向量检索')
-    pipeline.vector_retrieve(query="工程总投资")
+    print(pipeline.vector_retrieve(query="工程总投资",return_parent_pages=True))
 
     # print("bm25关键词构建-------")
     # pipeline.create_bm25_db()
