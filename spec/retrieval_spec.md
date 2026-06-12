@@ -176,7 +176,7 @@ class VectorRetriever:
 
     def retrieve(
         self,
-        company_name: str,
+        company_code: str,
         query: str,
         llm_reranking_sample_size: int = None,   # 占位，兼容 HybridRetriever
         top_n: int = 3,
@@ -197,7 +197,7 @@ class VectorRetriever:
 **实现要点**：
 - `__init__` 时通过 `Chroma(...)` 加载全局向量库，使用 `OpenAIEmbeddings`（与 `VectorDBIngestor` 一致）
 - `__init__` 时遍历 `documents_dir/*.json` 建立 `sha1 -> {page_num: page_text}` 映射表 `_pages_by_sha1`
-- `retrieve` 调用 `Chroma.similarity_search_with_score(query, k=top_n, ...)`；仅当 `company_name` 非空时传入 `filter={"company_name": company_name}`
+- `retrieve` 调用 `Chroma.similarity_search_with_score(query, k=top_n, ...)`；仅当 `company_code` 非空时传入 `filter={"company_code": company_code}`
 - `return_parent_pages=True` 时，根据 `metadata["sha1"]` + `page` 从 `_pages_by_sha1` 查表获取整页内容；查不到时回退到 chunk text
 - 已移除对 DashScope/FAISS 的支持
 
@@ -224,7 +224,7 @@ class HybridRetriever:
     
     def retrieve(
         self,
-        company_name: str,
+        company_code: str,
         query: str,
         llm_reranking_sample_size: int = 28,
         documents_batch_size: int = 10,
@@ -438,4 +438,4 @@ print(result.binary_score)  # "yes" 或 "no"
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v1.0 | 2024-XX-XX | 初始版本，支持 BM25 / Vector / Hybrid 三种检索模式 |
-| v1.1 | 2026-06-11 | 新增 RetrievalGrader 描述；补充 HybridRetriever 计时输出、VectorRetriever 返回类型修正、DashScope 重排限制说明 |
+| v1.5 | 2026-06-12 | `VectorRetriever.retrieve` 改为按 `company_code` metadata 过滤 |

@@ -156,16 +156,16 @@ class VectorRetriever:
 
     def retrieve(
         self,
-        company_name: str,
+        company_code: str,
         query: str,
         llm_reranking_sample_size: int = None,  # 占位，兼容 HybridRetriever 调用
         top_n: int = 3,
         return_parent_pages: bool = False,
     ) -> List[Dict]:
-        """在全局 ChromaDB 向量库中按公司名过滤检索与 query 最相关的文本块。
+        """在全局 ChromaDB 向量库中按 company_code 过滤检索与 query 最相关的文本块。
 
         参数：
-            company_name: 目标公司名称，用于 ChromaDB metadata 过滤
+            company_code: 公司编码，用于 ChromaDB metadata 过滤
             query: 查询文本
             llm_reranking_sample_size: 占位参数，当前未使用
             top_n: 返回结果数量上限
@@ -175,8 +175,8 @@ class VectorRetriever:
             包含distance、page、text的字典列表
         """
         search_kwargs = {"k": top_n}
-        if company_name:
-            search_kwargs["filter"] = {"company_name": company_name}
+        if company_code:
+            search_kwargs["filter"] = {"company_code": company_code}
 
         docs_with_scores = self._vectorstore.similarity_search_with_score(
             query,
@@ -241,9 +241,9 @@ class HybridRetriever:
         self.reranker = LLMReranker()
         
     def retrieve(
-        self, 
-        company_name: str, 
-        query: str, 
+        self,
+        company_code: str,
+        query: str,
         llm_reranking_sample_size: int = 28,
         documents_batch_size: int = 10,
         top_n: int = 6,
@@ -254,7 +254,7 @@ class HybridRetriever:
         使用混合检索方法进行检索和重排。
         
         参数：
-            company_name: 需要检索的公司名称
+            company_code: 公司编码，用于向量召回阶段的 metadata 过滤
             query: 检索查询语句
             llm_reranking_sample_size: 首轮向量检索返回的候选数量
             documents_batch_size: 每次送入LLM重排的文档数
@@ -269,7 +269,7 @@ class HybridRetriever:
         # 首先用向量检索器获取初步结果
         print("[计时] [HybridRetriever] 开始向量检索 ...")
         vector_results = self.vector_retriever.retrieve(
-            company_name=company_name,
+            company_code=company_code,
             query=query,
             top_n=llm_reranking_sample_size,
             return_parent_pages=return_parent_pages
@@ -340,7 +340,7 @@ if __name__ == "__main__":
                 index_name="default",
             )
             vector_results = vector_retriever.retrieve(
-                company_name=TEST_COMPANY,
+                company_code=TEST_COMPANY,
                 query=TEST_QUERY,
                 top_n=3,
                 return_parent_pages=True,
@@ -363,7 +363,7 @@ if __name__ == "__main__":
                 documents_dir=REPORTS_DIR,
             )
             hybrid_results = hybrid_retriever.retrieve(
-                company_name=TEST_COMPANY,
+                company_code=TEST_COMPANY,
                 query=TEST_QUERY,
                 top_n=3,
                 return_parent_pages=True,

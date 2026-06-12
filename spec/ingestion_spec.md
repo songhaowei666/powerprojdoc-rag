@@ -55,7 +55,7 @@ pydantic-settings
   "metainfo": {
     "sha1": "abc123...",
     "sha1_name": "abc123...",
-    "company_name": "示例科技",
+    "company_code": "001",
     "file_name": "示例科技_2024年报.pdf",
     "pages_amount": 100
   },
@@ -115,7 +115,7 @@ class BM25Ingestor:
 5. 逐报告读取 JSON，提取 `metainfo` 与 `content.chunks`
 6. 对每个 chunk：
    - 收集 `text` 字段
-   - 调用 `_build_chunk_metadata(chunk, metainfo)` 生成元数据（含 `chunk_id`, `chunk_type`, `page`, `length_tokens`, `sha1`, `sha1_name`, `company_name`, `file_name`, `pages_amount`）
+   - 调用 `_build_chunk_metadata(chunk, metainfo)` 生成元数据（含 `chunk_id`, `chunk_type`, `page`, `length_tokens`, `sha1`, `sha1_name`, `company_code`, `file_name`, `pages_amount`）
 7. 调用 `create_bm25_index` 构建合并索引
 8. 将索引、元数据列表与原始文本列表一起保存为 `pickle`，文件名为 `{index_name}.pkl`，格式为 `{"index": BM25Okapi, "metadatas": List[dict], "texts": List[str]}`
 9. 打印处理数量
@@ -143,7 +143,7 @@ output_dir/
 | `length_tokens` | `chunk["length_tokens"]` | `0` |
 | `sha1` | `metainfo["sha1"]` | `""` |
 | `sha1_name` | `metainfo["sha1_name"]` | `""` |
-| `company_name` | `metainfo["company_name"]` | `""` |
+| `company_code` | `metainfo["company_code"]` | `""` |
 | `file_name` | `metainfo["file_name"]` | `""` |
 | `pages_amount` | `metainfo["pages_amount"]` | `0` |
 
@@ -225,7 +225,7 @@ def _get_embeddings(self, text)
 3. 截断到 `max_len = 2048` 字符：`t[:max_len]`
 4. 构建 `langchain_core.documents.Document` 列表，metadata 包含：
    - `chunk_id`, `chunk_type`, `page`, `length_tokens`
-   - `sha1`, `sha1_name`, `company_name`, `file_name`, `pages_amount`
+   - `sha1`, `sha1_name`, `company_code`, `file_name`, `pages_amount`
    - `index_name`（由 `process_reports` 传入，默认 `"default"`）
 
 > ⚠️ 注意：截断按**字符数**而非 token 数，与 `text_splitter.py` 中的 token 统计逻辑不一致。
@@ -346,4 +346,4 @@ ingestor.process_reports(
 |------|------|----------|
 | v1.0 | 2024-XX-XX | 初始实现，支持 BM25 + DashScope/FAISS 向量索引构建 |
 | v1.1 | 2026-06-11 | VectorDBIngestor 迁移至 OpenAI Embedding + ChromaDB；移除 FAISS 与 DashScope 依赖 |
-| v1.2 | 2026-06-11 | `VectorDBIngestor.process_reports` 支持 `output_dir` / `index_name` 可空；`CHROMA_PERSIST_DIR` 配置移至 `.env`；metadata 新增 `index_name` 字段 |
+| v1.3 | 2026-06-12 | chunk metadata 使用 `company_code` 替代 `company_name`，值取自报告 JSON 的 `metainfo` |

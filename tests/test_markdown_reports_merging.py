@@ -5,6 +5,7 @@ Follows TDD principles: tests are written against the spec in spec/markdown_repo
 Run with: pytest tests/test_markdown_reports_merging.py -v
 """
 
+import hashlib
 import json
 import sys
 from io import StringIO
@@ -124,7 +125,7 @@ def parsed_report_data():
         "metainfo": {
             "sha1_name": "doc123",
             "sha1": "doc123",
-            "company_name": "示例科技",
+            "company_code": "示例科技",
             "file_name": "示例科技_2024年报.pdf",
             "pages_amount": 1,
             "text_blocks_amount": 2,
@@ -219,9 +220,10 @@ class TestBatchProcessing:
             results = merger.process_reports(reports_paths=[report_path])
 
         assert len(results) == 1
-        # metainfo should be preserved from original parsed report
-        assert results[0]["metainfo"]["company_name"] == "示例科技"
-        assert results[0]["metainfo"]["sha1"] == "doc123"
+        raw_md5 = hashlib.md5(report_path.read_bytes()).hexdigest()
+        assert results[0]["metainfo"]["company_code"] == "001"
+        assert results[0]["metainfo"]["sha1"] == raw_md5
+        assert "company_name" not in results[0]["metainfo"]
 
     def test_mixed_formats(self, tmp_path, merger, mineru_report_data, parsed_report_data, mock_processed_report):
         """T5: 混合传入 MinerU 和已规整格式，分别正确处理。"""
@@ -238,8 +240,9 @@ class TestBatchProcessing:
         assert len(results) == 2
         # First is MinerU -> pages_amount from conversion
         assert results[0]["metainfo"]["pages_amount"] == 2
-        # Second is parsed -> preserve original metainfo
-        assert results[1]["metainfo"]["company_name"] == "示例科技"
+        parsed_md5 = hashlib.md5(parsed_path.read_bytes()).hexdigest()
+        assert results[1]["metainfo"]["company_code"] == "001"
+        assert results[1]["metainfo"]["sha1"] == parsed_md5
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +270,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert len(blocks) == 1
         assert blocks[0]["type"] == "section_header"
@@ -291,7 +294,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert blocks[0]["type"] == "text"
         assert blocks[0]["text"] == "正文段落。"
@@ -314,7 +317,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert blocks[0]["type"] == "paragraph"
 
@@ -335,7 +338,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert blocks[0]["type"] == "table"
         assert blocks[0]["table_id"] == 0
@@ -365,7 +368,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         assert parsed["tables"][0]["markdown"] == bad_html
 
     def test_image_mapped_to_picture(self, merger):
@@ -380,7 +383,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert blocks[0]["type"] == "picture"
         assert blocks[0]["picture_id"] == 0
@@ -416,7 +419,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert len(blocks) == 2
         assert blocks[0]["text"] == "a"
@@ -441,7 +444,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert blocks[0]["type"] == "text"
         assert blocks[0]["text"] == "fallback text"
@@ -476,7 +479,7 @@ class TestFormatConversion:
                 },
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         pages = parsed["content"]
         assert len(pages) == 2
         assert pages[0]["page"] == 1
@@ -514,7 +517,7 @@ class TestFormatConversion:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         blocks = parsed["content"][0]["content"]
         assert len(blocks) == 1
         assert blocks[0]["text"] == "valid"
@@ -525,86 +528,64 @@ class TestFormatConversion:
 # ---------------------------------------------------------------------------
 
 class TestMetainfoParsing:
-    """Tests for subset.csv loading, filename resolution and output naming."""
+    """Tests for metainfo injection, filename resolution and output naming."""
 
-    def test_subset_csv_loads_metainfo(self, tmp_path, merger, mineru_report_data, mock_processed_report):
-        """T16: 提供有效的 subset.csv，按文件名匹配正确填充元信息。"""
+    def test_mineru_metainfo_uses_file_md5(self, tmp_path, merger, mineru_report_data, mock_processed_report):
+        """T16: sha1 为原始 JSON 文件 MD5。"""
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        report_path = reports_dir / "report.json"
+        _write_json(report_path, mineru_report_data)
+        expected_md5 = hashlib.md5(report_path.read_bytes()).hexdigest()
+
+        with patch.object(merger._page_preparator, "process_report", return_value=mock_processed_report):
+            results = merger.process_reports(reports_paths=[report_path])
+
+        assert results[0]["metainfo"]["sha1"] == expected_md5
+        assert results[0]["metainfo"]["company_code"] == "001"
+
+    def test_custom_company_code(self, tmp_path, merger, mineru_report_data, mock_processed_report):
+        """T17: 传入自定义 company_code。"""
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
         report_path = reports_dir / "report.json"
         _write_json(report_path, mineru_report_data)
 
-        subset_csv = tmp_path / "subset.csv"
-        subset_csv.write_text(
-            "file_name,sha1,company_name\n"
-            "report.json,abc123,测试公司\n",
-            encoding="utf-8",
-        )
-
         with patch.object(merger._page_preparator, "process_report", return_value=mock_processed_report):
             results = merger.process_reports(
-                reports_paths=[report_path], subset_csv=subset_csv
+                reports_paths=[report_path], company_code="002"
             )
 
-        assert results[0]["metainfo"]["company_name"] == "测试公司"
-        assert results[0]["metainfo"]["sha1"] == "abc123"
+        assert results[0]["metainfo"]["company_code"] == "002"
 
-    def test_subset_csv_gbk_encoding(self, tmp_path, merger, mineru_report_data, mock_processed_report):
-        """T17: subset.csv 编码为 gbk 时正确解码并读取。"""
+    def test_default_company_code(self, tmp_path, merger, mineru_report_data, mock_processed_report):
+        """T18: 未传 company_code 时默认为 001。"""
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
         report_path = reports_dir / "report.json"
         _write_json(report_path, mineru_report_data)
 
-        subset_csv = tmp_path / "subset.csv"
-        subset_csv.write_text(
-            "file_name,sha1,company_name\n"
-            "report.json,abc123,测试公司\n",
-            encoding="gbk",
-        )
-
         with patch.object(merger._page_preparator, "process_report", return_value=mock_processed_report):
-            results = merger.process_reports(
-                reports_paths=[report_path], subset_csv=subset_csv
-            )
+            results = merger.process_reports(reports_paths=[report_path])
 
-        assert results[0]["metainfo"]["company_name"] == "测试公司"
+        assert results[0]["metainfo"]["company_code"] == "001"
 
-    def test_subset_csv_missing_filename_column(self, tmp_path, merger, mineru_report_data, mock_processed_report):
-        """T18: subset.csv 缺少 file_name 列时忽略 CSV，metainfo 使用默认值。"""
+    def test_parsed_report_overwrites_metainfo(self, tmp_path, merger, parsed_report_data, mock_processed_report):
+        """T19: 已规整格式覆盖 sha1 并写入 company_code，移除 company_name。"""
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
-        report_path = reports_dir / "report.json"
-        _write_json(report_path, mineru_report_data)
-
-        subset_csv = tmp_path / "subset.csv"
-        subset_csv.write_text(
-            "sha1,company_name\n" "abc123,测试公司\n", encoding="utf-8"
-        )
+        report_path = reports_dir / "doc.json"
+        _write_json(report_path, parsed_report_data)
+        expected_md5 = hashlib.md5(report_path.read_bytes()).hexdigest()
 
         with patch.object(merger._page_preparator, "process_report", return_value=mock_processed_report):
             results = merger.process_reports(
-                reports_paths=[report_path], subset_csv=subset_csv
+                reports_paths=[report_path], company_code="003"
             )
 
-        # Without file_name column, no mapping is built; company_name defaults to ""
-        assert results[0]["metainfo"]["company_name"] == ""
-
-    def test_subset_csv_not_exists(self, tmp_path, merger, mineru_report_data, mock_processed_report):
-        """T19: subset.csv 文件不存在时返回空映射，metainfo 使用默认值。"""
-        reports_dir = tmp_path / "reports"
-        reports_dir.mkdir()
-        report_path = reports_dir / "report.json"
-        _write_json(report_path, mineru_report_data)
-
-        subset_csv = tmp_path / "nonexistent.csv"
-
-        with patch.object(merger._page_preparator, "process_report", return_value=mock_processed_report):
-            results = merger.process_reports(
-                reports_paths=[report_path], subset_csv=subset_csv
-            )
-
-        assert results[0]["metainfo"]["company_name"] == ""
+        assert results[0]["metainfo"]["sha1"] == expected_md5
+        assert results[0]["metainfo"]["company_code"] == "003"
+        assert "company_name" not in results[0]["metainfo"]
 
     def test_mineru_filename_prefix_stripping(self, merger):
         """T20: MinerU 文件名以 MinerU_ 开头并含 __ 时正确提取报告主名。"""
@@ -666,7 +647,7 @@ class TestStatsAndBoundaries:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         assert len(parsed["content"]) == 1
         assert parsed["content"][0]["content"] == []
         assert parsed["metainfo"]["pages_amount"] == 1
@@ -690,7 +671,7 @@ class TestStatsAndBoundaries:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         dims = parsed["content"][0]["page_dimensions"]
         assert dims["width"] == 595
         assert dims["height"] == 841
@@ -718,7 +699,7 @@ class TestStatsAndBoundaries:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         assert len(parsed["tables"]) == 2
         assert parsed["tables"][0]["table_id"] == 0
         assert parsed["tables"][1]["table_id"] == 1
@@ -740,7 +721,7 @@ class TestStatsAndBoundaries:
                 }
             ]
         }
-        parsed = merger._mineru_to_parsed_report(mineru_data, {}, "test")
+        parsed = merger._mineru_to_parsed_report(mineru_data, "test_md5", "001", "test")
         assert parsed["tables"][0]["markdown"] == ""
 
     def test_output_dir_exists(self, tmp_path, merger, parsed_report_data, mock_processed_report):

@@ -238,11 +238,11 @@ class TestVectorRetriever:
     def test_vector_retrieve_success(self, mock_load_store, tmp_path):
         mock_doc1 = Document(
             page_content="chunk C text",
-            metadata={"page": 3, "sha1": "sha1", "company_name": "示例科技"},
+            metadata={"page": 3, "sha1": "sha1", "company_code": "001"},
         )
         mock_doc2 = Document(
             page_content="chunk A text",
-            metadata={"page": 1, "sha1": "sha1", "company_name": "示例科技"},
+            metadata={"page": 1, "sha1": "sha1", "company_code": "001"},
         )
         mock_store = MagicMock()
         mock_store.similarity_search_with_score.return_value = [
@@ -253,7 +253,7 @@ class TestVectorRetriever:
 
         retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
         results = retriever.retrieve(
-            company_name="示例科技", query="test", top_n=2
+            company_code="001", query="test", top_n=2
         )
 
         assert len(results) == 2
@@ -264,7 +264,7 @@ class TestVectorRetriever:
         assert results[1]["distance"] == 0.5
         assert results[1]["text"] == "chunk A text"
         mock_store.similarity_search_with_score.assert_called_once_with(
-            "test", k=2, filter={"company_name": "示例科技"}
+            "test", k=2, filter={"company_code": "001"}
         )
 
     @patch("src.retrieval.VectorRetriever._load_vectorstore")
@@ -290,7 +290,7 @@ class TestVectorRetriever:
 
         retriever = VectorRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
         results = retriever.retrieve(
-            company_name="示例科技", query="test", top_n=2, return_parent_pages=True
+            company_code="001", query="test", top_n=2, return_parent_pages=True
         )
 
         assert len(results) == 2
@@ -357,7 +357,7 @@ class TestHybridRetriever:
 
         retriever = HybridRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
         results = retriever.retrieve(
-            company_name="示例科技",
+            company_code="示例科技",
             query="test",
             llm_reranking_sample_size=10,
             documents_batch_size=5,
@@ -367,7 +367,7 @@ class TestHybridRetriever:
 
         assert len(results) == 2
         mock_vector_instance.retrieve.assert_called_once_with(
-            company_name="示例科技",
+            company_code="示例科技",
             query="test",
             top_n=10,
             return_parent_pages=False,
@@ -399,7 +399,7 @@ class TestHybridRetriever:
 
         retriever = HybridRetriever(vector_db_dir=tmp_path, documents_dir=tmp_path)
         results = retriever.retrieve(
-            company_name="示例科技", query="test", top_n=1
+            company_code="示例科技", query="test", top_n=1
         )
 
         # Even though reranker returned 2, we clip to top_n=1

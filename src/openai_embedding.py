@@ -95,7 +95,7 @@ class OpenAIVectorDBIngestor:
                         "length_tokens": chunk.get("length_tokens", 0),
                         "sha1": metainfo.get("sha1", ""),
                         "sha1_name": metainfo.get("sha1_name", ""),
-                        "company_name": metainfo.get("company_name", ""),
+                        "company_code": metainfo.get("company_code", ""),
                         "file_name": metainfo.get("file_name", ""),
                         "pages_amount": metainfo.get("pages_amount", 0),
                     }

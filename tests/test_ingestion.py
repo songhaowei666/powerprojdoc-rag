@@ -49,7 +49,7 @@ def sample_report():
     return {
         "metainfo": {
             "sha1": "abc123def456",
-            "company_name": "示例科技",
+            "company_code": "001",
         },
         "content": {
             "chunks": [
@@ -109,7 +109,7 @@ class TestBM25Ingestor:
         assert len(metadatas) == 3
         for m in metadatas:
             assert m["sha1"] == sample_report["metainfo"]["sha1"]
-            assert m["company_name"] == sample_report["metainfo"]["company_name"]
+            assert m["company_code"] == sample_report["metainfo"]["company_code"]
 
     def test_process_reports_empty_dir(self, tmp_path, capsys):
         reports_dir = tmp_path / "empty_reports"
@@ -179,7 +179,7 @@ class TestBM25Ingestor:
 
         for i in range(3):
             report = {
-                "metainfo": {"sha1": f"sha{i}", "company_name": f"公司{i}"},
+                "metainfo": {"sha1": f"sha{i}", "company_code": f"00{i}"},
                 "content": {"chunks": [{"text": f"text {i}", "page": i + 1, "id": i}]},
             }
             (reports_dir / f"report_{i}.json").write_text(
@@ -414,7 +414,7 @@ class TestVectorDBIngestor:
     @patch("src.ingestion.faiss.write_index")
     def test_process_reports_missing_sha1(self, mock_write, mock_process, tmp_path):
         bad_report = {
-            "metainfo": {"company_name": "no sha1"},
+            "metainfo": {"company_code": "001"},
             "content": {"chunks": [{"text": "test"}]},
         }
         reports_dir = tmp_path / "reports"

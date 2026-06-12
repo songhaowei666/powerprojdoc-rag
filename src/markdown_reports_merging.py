@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -33,7 +34,7 @@ class MinerUReportMerger:
         reports_dir: Path = None,
         reports_paths: List[Path] = None,
         output_dir: Path = None,
-        subset_csv: Path = None,
+        company_code: str = "001",
     ) -> List[Dict]:
         """
         批量处理 JSON 报告，返回规整后报告列表，可选保存到输出目录。
@@ -43,16 +44,23 @@ class MinerUReportMerger:
         if reports_dir:
             reports_paths = list(reports_dir.glob("*.json"))
 
-        file2meta = self._load_metainfo_from_subset(subset_csv)
-
         for report_path in reports_paths:
+            raw_bytes = report_path.read_bytes()
+            file_md5 = self._compute_file_md5(raw_bytes)
+            report_stem = self._resolve_report_stem(report_path)
+
             with open(report_path, "r", encoding="utf-8") as file:
                 report_data = json.load(file)
 
             if "pdf_info" in report_data:
-                stem = self._resolve_report_stem(report_path)
-                metainfo = file2meta.get(stem, {})
-                report_data = self._mineru_to_parsed_report(report_data, metainfo, stem)
+                report_data = self._mineru_to_parsed_report(
+                    report_data, file_md5, company_code, report_stem
+                )
+            else:
+                report_data.setdefault("metainfo", {})
+                self._apply_metainfo(
+                    report_data["metainfo"], file_md5, company_code, report_stem
+                )
 
             full_report_text = self._page_preparator.process_report(report_data)
             report = {"metainfo": report_data["metainfo"], "content": full_report_text}
@@ -66,8 +74,33 @@ class MinerUReportMerger:
 
         return all_reports
 
+    @staticmethod
+    def _compute_file_md5(raw_bytes: bytes) -> str:
+        """计算原始 JSON 文件内容的 MD5 十六进制摘要。"""
+        return hashlib.md5(raw_bytes).hexdigest()
+
+    def _apply_metainfo(
+        self,
+        metainfo: Dict,
+        file_md5: str,
+        company_code: str,
+        report_stem: str,
+    ) -> None:
+        """将 sha1 与 company_code 写入 metainfo，不再依赖 subset.csv。"""
+        metainfo["sha1"] = file_md5
+        metainfo["company_code"] = company_code
+        metainfo.pop("company_name", None)
+        if not metainfo.get("sha1_name"):
+            metainfo["sha1_name"] = report_stem
+        if not metainfo.get("file_name"):
+            metainfo["file_name"] = report_stem
+
     def _mineru_to_parsed_report(
-        self, mineru_data: Dict, base_metainfo: Dict, report_stem: str
+        self,
+        mineru_data: Dict,
+        file_md5: str,
+        company_code: str,
+        report_stem: str,
     ) -> Dict:
         """MinerU JSON 转为 01_parsed_reports 结构，供 PageTextPreparation 使用。"""
         self._table_id_counter = 0
@@ -106,10 +139,10 @@ class MinerUReportMerger:
             )
 
         metainfo = {
-            "sha1_name": base_metainfo.get("sha1", base_metainfo.get("sha1_name", report_stem)),
-            "sha1": base_metainfo.get("sha1", ""),
-            "company_name": base_metainfo.get("company_name", ""),
-            "file_name": base_metainfo.get("file_name", report_stem),
+            "sha1_name": report_stem,
+            "sha1": file_md5,
+            "company_code": company_code,
+            "file_name": report_stem,
             "pages_amount": len(pages_content),
             "text_blocks_amount": text_blocks_amount,
             "tables_amount": tables_amount,
@@ -232,40 +265,10 @@ class MinerUReportMerger:
             return f"{metainfo['sha1_name']}.json"
         return self._resolve_report_stem(report_path) + ".json"
 
-    def _load_metainfo_from_subset(self, subset_csv: Optional[Path]) -> Dict[str, Dict]:
-        """从 subset.csv 建立文件名到 metainfo 的映射。"""
-        file2meta = {}
-        if subset_csv is None or not subset_csv.exists():
-            return file2meta
-
-        try:
-            df = pd.read_csv(subset_csv, encoding="utf-8")
-        except UnicodeDecodeError:
-            df = pd.read_csv(subset_csv, encoding="gbk")
-
-        if "file_name" not in df.columns:
-            return file2meta
-
-        for _, row in df.iterrows():
-            file_no_ext = os.path.splitext(str(row["file_name"]))[0]
-            file2meta[file_no_ext] = {
-                "sha1": str(row.get("sha1", "")),
-                "company_name": str(row.get("company_name", "")),
-                "file_name": str(row["file_name"]),
-            }
-
-        return file2meta
-
 
 if __name__ == "__main__":
     """
     本地调试入口：对单份 MinerU 解析后的 JSON 报告进行合并测试。
-
-    流程：
-        1. 定位示例 JSON 文件、输出目录及 subset.csv 元数据文件；
-        2. 实例化 MinerUReportMerger；
-        3. 调用 process_reports 完成页面合并与元数据注入；
-        4. 打印公司名称、总页数及首页前 400 字符预览。
     """
     root = Path(__file__).resolve().parent.parent
     json_path = (
@@ -273,15 +276,15 @@ if __name__ == "__main__":
         / "data/stock_data/debug_data/MinerU_【财报】中芯国际：中芯国际2024年年度报告__20260520083937.json"
     )
     output_dir = root / "data/stock_data/debug_data/02_merged_reports"
-    subset_csv = root / "data/stock_data/subset.csv"
 
     merger = MinerUReportMerger()
     reports = merger.process_reports(
         reports_paths=[json_path],
         output_dir=output_dir,
-        subset_csv=subset_csv,
+        company_code="001",
     )
     report = reports[0]
-    print(f"公司: {report['metainfo'].get('company_name')}")
+    print(f"company_code: {report['metainfo'].get('company_code')}")
+    print(f"sha1: {report['metainfo'].get('sha1')}")
     print(f"页数: {len(report['content']['pages'])}")
     print(f"首段预览:\n{report['content']['pages'][0]['text'][:400]}...")

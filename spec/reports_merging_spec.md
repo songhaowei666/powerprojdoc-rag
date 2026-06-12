@@ -100,17 +100,18 @@ pandas
 }
 ```
 
-### 3.3 辅助元数据（subset.csv）
+### 3.3 元数据规则
 
-可选的 CSV 文件，用于补充报告元信息：
+不再读取 `subset.csv`。`process_reports` 通过 `company_code` 参数注入公司编码：
 
-| 列名 | 说明 |
+| 字段 | 来源 |
 |------|------|
-| `file_name` | 原始文件名（含扩展名），用于匹配 |
-| `sha1` | 文件哈希标识 |
-| `company_name` | 公司名称 |
+| `sha1` | 原始 JSON 文件内容的 MD5 十六进制摘要 |
+| `company_code` | 调用方传入，默认 `"001"` |
+| `sha1_name` | 报告文件名 stem（MinerU 文件名会先剥离前缀） |
+| `file_name` | 同 `sha1_name`（MinerU 格式）或保留原 metainfo |
 
-CSV 编码支持 `utf-8`，解码失败时回退 `gbk`。
+`metainfo` 中不再写入 `company_name`。
 
 ---
 
@@ -127,31 +128,31 @@ class MinerUReportMerger:
         reports_dir: Path = None,
         reports_paths: List[Path] = None,
         output_dir: Path = None,
-        subset_csv: Path = None,
+        company_code: str = "001",
     ) -> List[Dict]
 ```
 
 **输入**：
 - 报告来源：目录路径（自动收集 `*.json`）或文件路径列表
 - 可选的输出目录路径
-- 可选的 subset.csv 路径
+- `company_code`：公司编码，写入每条报告的 `metainfo.company_code`
 
 **处理流程**：
 
-1. **元数据加载**：若提供 subset.csv，建立「去扩展名文件名 → {sha1, company_name, file_name}」的映射表
-2. **文件遍历**：遍历所有 JSON 报告文件
-3. **格式识别与转换**：
+1. **文件遍历**：遍历所有 JSON 报告文件，读取原始字节并计算 MD5
+2. **格式识别与转换**：
    - 若 JSON 含 `pdf_info` 键，判定为 MinerU 格式，执行转换流程
-   - 否则视为已规整格式，直接透传
-4. **文件名解析**（MinerU 格式）：
+   - 否则视为已规整格式，直接更新 metainfo
+3. **文件名解析**（MinerU 格式）：
    - 从文件名提取报告主名
    - 若文件名以 `MinerU_` 开头，移除前缀并按 `__` 切分取第一部分
-5. **元信息填充**（MinerU 格式）：
-   - 通过解析后的主名在 subset.csv 映射表中查找元数据
-   - 组装 `metainfo`，包含：sha1_name、sha1、company_name、file_name、pages_amount、text_blocks_amount、tables_amount、pictures_amount、equations_amount、footnotes_amount
-6. **页面文本规整**：调用 `PageTextPreparation.process_report` 处理 content 内容，生成按页组织的清洗后文本
-7. **结果组装**：每条报告输出为 `{metainfo, content}` 结构
-8. **可选持久化**：若指定输出目录，自动创建目录，按规则生成文件名并写入 JSON
+4. **元信息填充**：
+   - `sha1` = 原始 JSON 文件 MD5
+   - `company_code` = 传入参数
+   - 组装 `metainfo`，包含：sha1_name、sha1、company_code、file_name、pages_amount、text_blocks_amount、tables_amount、pictures_amount、equations_amount、footnotes_amount
+5. **页面文本规整**：调用 `PageTextPreparation.process_report` 处理 content 内容，生成按页组织的清洗后文本
+6. **结果组装**：每条报告输出为 `{metainfo, content}` 结构
+7. **可选持久化**：若指定输出目录，自动创建目录，按规则生成文件名并写入 JSON
 
 **输出文件名规则**（按优先级）：
 1. `metainfo.file_name` 的去扩展名 + `.json`
@@ -334,10 +335,10 @@ def _get_serialized_table_text(self, table: dict, serialized_tables_instead_of_m
 
 | # | 测试场景 | 预期行为 |
 |---|---------|---------|
-| T16 | 提供有效的 subset.csv | 按文件名匹配，正确填充 sha1、company_name、file_name |
-| T17 | subset.csv 编码为 gbk | 正确解码并读取 |
-| T18 | subset.csv 缺少 file_name 列 | 忽略 CSV，返回空映射，metainfo 使用默认值 |
-| T19 | subset.csv 文件不存在 | 返回空映射，metainfo 使用默认值 |
+| T16 | 传入 MinerU JSON 文件 | sha1 为原始文件 MD5，company_code 为传入值 |
+| T17 | 传入自定义 company_code | metainfo.company_code 与传入值一致 |
+| T18 | 未传 company_code | 默认 company_code 为 `"001"` |
+| T19 | 已规整格式 JSON | sha1 覆盖为文件 MD5，company_code 写入，移除 company_name |
 | T20 | MinerU 文件名以 `MinerU_` 开头并含 `__` | 正确提取报告主名（移除前缀，取 `__` 前部分） |
 | T21 | MinerU 文件名无特殊前缀 | 直接使用文件 stem 作为主名 |
 | T22 | metainfo 中 file_name 非空 | 输出文件名为 file_name 去扩展名 + `.json` |
@@ -375,7 +376,6 @@ def _get_serialized_table_text(self, table: dict, serialized_tables_instead_of_m
 | 输入 JSON 文件无法解析 | 由 `json.load` 抛出异常，外层未捕获 |
 | MinerU 块缺少 `lines` | `_extract_mineru_text` 返回空字符串，通常被忽略 |
 | table 块在 tables 数组中找不到对应 ID | 由 `PageTextPreparation` 阶段抛出 `ValueError` |
-| subset.csv 编码既非 utf-8 也非 gbk | 第二次 `pd.read_csv` 仍可能抛异常 |
 | 输出目录路径为文件而非目录 | `mkdir(parents=True, exist_ok=True)` 行为取决于操作系统 |
 
 ---

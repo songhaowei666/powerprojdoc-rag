@@ -163,7 +163,7 @@ class QuestionsProcessor:
         else:           
             t2 = time.time()
             retrieval_results = retriever.retrieve(
-                company_name=company_name,
+                company_code=company_name,
                 query=question,
                 llm_reranking_sample_size=self.llm_reranking_sample_size,
                 top_n=self.top_n_retrieval,

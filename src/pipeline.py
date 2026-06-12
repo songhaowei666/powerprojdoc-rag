@@ -8,7 +8,6 @@ import os
 import json
 import pandas as pd
 import shutil
-import time
 
 # 将项目根目录加入 sys.path，支持直接运行本文件
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -20,63 +19,53 @@ from src.markdown_reports_merging import MinerUReportMerger
 from src.text_splitter import TextSplitter
 from src.ingestion import VectorDBIngestor
 from src.ingestion import BM25Ingestor
-from src.questions_processing import QuestionsProcessor
+from src.retrieval import BM25Retriever, HybridRetriever, VectorRetriever
 from src.config import settings
 from src.tables_serialization import TableSerializer
 
 @dataclass
 class PipelineConfig:
-    def __init__(self, root_path: Path, subset_name: str = "subset.csv", questions_file_name: str = "questions.json", pdf_reports_dir_name: str = "pdf_reports", serialized: bool = False, config_suffix: str = ""):
-        # 路径配置，支持不同流程和数据目录
-        self.root_path = root_path
-        suffix = "_ser_tab" if serialized else ""
+    """流水线路径与目录配置，根据 root_path 派生所有流程路径。"""
 
-        self.subset_path = root_path / subset_name
-        self.questions_file_path = root_path / questions_file_name
-        self.pdf_reports_dir = root_path / pdf_reports_dir_name
-        
-        self.answers_file_path = root_path / f"answers{config_suffix}.json"       
-        self.debug_data_path = root_path / "debug_data"
-        self.databases_path = root_path / f"databases{suffix}"
-        
+    root_path: Path
+    subset_name: str = "subset.csv"
+    questions_file_name: str = "questions.json"
+    pdf_reports_dir_name: str = "pdf_reports"
+    use_serialized_tables: bool = False
+    config_suffix: str = ""
+    company_code: str = "001"
+
+    def __post_init__(self) -> None:
+        suffix = "_ser_tab" if self.use_serialized_tables else ""
+
+        self.subset_path = self.root_path / self.subset_name
+        self.questions_file_path = self.root_path / self.questions_file_name
+        self.pdf_reports_dir = self.root_path / self.pdf_reports_dir_name
+
+        self.answers_file_path = self.root_path / f"answers{self.config_suffix}.json"
+        self.debug_data_path = self.root_path / "debug_data"
+        self.databases_path = self.root_path / f"databases{suffix}"
+
         self.vector_db_dir = self.databases_path / settings.vector_db_subdir
         self.documents_dir = self.databases_path / settings.chunked_reports_subdir
         self.bm25_db_path = self.databases_path / settings.bm25_dbs_subdir
 
-        # self.parsed_reports_dirname = "01_parsed_reports"
-        # self.parsed_reports_debug_dirname = "01_parsed_reports_debug"
         self.merged_reports_dirname = f"02_merged_reports{suffix}"
         self.reports_markdown_dirname = f"03_reports_markdown{suffix}"
 
-        #self.parsed_reports_path = self.debug_data_path / self.parsed_reports_dirname
-        #self.parsed_reports_debug_path = self.debug_data_path / self.parsed_reports_debug_dirname
         self.merged_reports_path = self.debug_data_path / self.merged_reports_dirname
         self.reports_markdown_path = self.debug_data_path / self.reports_markdown_dirname
 
-class Pipeline:
-    def __init__(
-        self,
-        root_path: Path,
-        subset_name: str = "subset.csv",
-        questions_file_name: str = "questions.json",
-        pdf_reports_dir_name: str = "pdf_reports",
-        use_serialized_tables: bool = False,
-        config_suffix: str = "",
-    ):
-        # 初始化主流程，加载路径和配置
-        self.use_serialized_tables = use_serialized_tables
-        self.config_suffix = config_suffix
-        self.paths = PipelineConfig(
-            root_path=root_path,
-            subset_name=subset_name,
-            questions_file_name=questions_file_name,
-            pdf_reports_dir_name=pdf_reports_dir_name,
-            serialized=use_serialized_tables,
-            config_suffix=config_suffix
-        )
-        self._convert_json_to_csv_if_needed()
+    @classmethod
+    def from_root(cls, root_path: Path, **kwargs: object) -> "PipelineConfig":
+        """从数据集根目录快速构建配置。"""
+        return cls(root_path=root_path, **kwargs)
 
-    def _convert_json_to_csv_if_needed(self):
+
+class Pipeline:
+    def __init__(self, config: PipelineConfig) -> None:
+        self.config = config
+
 
 
 
@@ -89,19 +78,19 @@ class Pipeline:
         logging.basicConfig(level=logging.DEBUG)
         
         pdf_parser = PDFParser(
-            output_dir=self.paths.parsed_reports_path,
-            csv_metadata_path=self.paths.subset_path
+            output_dir=self.config.parsed_reports_path,
+            csv_metadata_path=self.config.subset_path
         )
-        pdf_parser.debug_data_path = self.paths.parsed_reports_debug_path
+        pdf_parser.debug_data_path = self.config.parsed_reports_debug_path
 
-        input_doc_paths = list(self.paths.pdf_reports_dir.glob("*.pdf"))
+        input_doc_paths = list(self.config.pdf_reports_dir.glob("*.pdf"))
         
         pdf_parser.parse_and_export_parallel(
             input_doc_paths=input_doc_paths,
             optimal_workers=max_workers,
             chunk_size=chunk_size
         )
-        print(f"PDF reports parsed and saved to {self.paths.parsed_reports_path}")
+        print(f"PDF reports parsed and saved to {self.config.parsed_reports_path}")
 
     def export_reports_to_markdown(self, file_name):
         """
@@ -121,10 +110,10 @@ class Pipeline:
             print(f"未找到 markdown 文件: {md_path}")
             return
         # 目标目录
-        os.makedirs(self.paths.reports_markdown_path, exist_ok=True)
+        os.makedirs(self.config.reports_markdown_path, exist_ok=True)
         # 目标文件名为原始 file_name，扩展名改为 .md
         base_name = os.path.splitext(file_name)[0]
-        target_path = os.path.join(self.paths.reports_markdown_path, f"{base_name}.md")
+        target_path = os.path.join(self.config.reports_markdown_path, f"{base_name}.md")
         shutil.move(md_path, target_path)
         print(f"已将 {md_path} 移动到 {target_path}")
 
@@ -146,10 +135,10 @@ class Pipeline:
         reports = merger.process_reports(
             reports_dir=reports_dir,
             reports_paths=reports_paths,
-            output_dir=self.paths.merged_reports_path,
-            subset_csv=self.paths.subset_path,
+            output_dir=self.config.merged_reports_path,
+            company_code=self.config.company_code,
         )
-        print(f"Merged {len(reports)} reports into {self.paths.merged_reports_path}")
+        print(f"Merged {len(reports)} reports into {self.config.merged_reports_path}")
         return reports
     
     def chunk_reports(self, include_serialized_tables: bool = False):
@@ -158,32 +147,32 @@ class Pipeline:
         """
         text_splitter = TextSplitter()
         # 只处理 markdown 文件，输入目录为 reports_markdown_path，输出目录为 documents_dir
-        print(f"开始分割 {self.paths.reports_markdown_path} 目录下的 markdown 文件...")
+        print(f"开始分割 {self.config.reports_markdown_path} 目录下的 markdown 文件...")
         # 自动传入 subset.csv 路径，便于补充 company_name 字段
         text_splitter.split_markdown_reports(
-            all_md_dir=self.paths.merged_reports_path,
-            output_dir=self.paths.documents_dir,
-            subset_csv=self.paths.subset_path
+            all_md_dir=self.config.merged_reports_path,
+            output_dir=self.config.documents_dir,
+            subset_csv=self.config.subset_path
         )
-        print(f"分割完成，结果已保存到 {self.paths.documents_dir}")
+        print(f"分割完成，结果已保存到 {self.config.documents_dir}")
     def chunk_reports2(self, include_serialized_tables: bool = False):
         """将规整后报告分块，便于后续向量化和检索"""
         text_splitter = TextSplitter()
         
         serialized_tables_dir = None
         if include_serialized_tables:
-            serialized_tables_dir = self.paths.parsed_reports_path
+            serialized_tables_dir = self.config.parsed_reports_path
         
         text_splitter.split_all_reports(
-            self.paths.merged_reports_path,
-            self.paths.documents_dir,
+            self.config.merged_reports_path,
+            self.config.documents_dir,
             serialized_tables_dir
         )
-        print(f"Chunked reports saved to {self.paths.documents_dir}")
+        print(f"Chunked reports saved to {self.config.documents_dir}")
     def create_vector_dbs(self):
         """从分块报告创建向量数据库"""
-        input_dir = self.paths.documents_dir
-        output_dir = self.paths.vector_db_dir
+        input_dir = self.config.documents_dir
+        output_dir = self.config.vector_db_dir
         
         from openai_embedding import get_openai_embedding
         vdb_ingestor = VectorDBIngestor(embedder=get_openai_embedding())
@@ -192,8 +181,8 @@ class Pipeline:
     
     def create_bm25_db(self):
         """从分块报告创建BM25数据库"""
-        input_dir = self.paths.documents_dir
-        output_file = self.paths.bm25_db_path
+        input_dir = self.config.documents_dir
+        output_file = self.config.bm25_db_path
         
         bm25_ingestor = BM25Ingestor()
         bm25_ingestor.process_reports(input_dir, output_file)
@@ -220,111 +209,101 @@ class Pipeline:
         
         print("报告处理流程已成功完成！")
         
-    def _get_next_available_filename(self, base_path: Path) -> Path:
-        """
-        获取下一个可用的文件名，如果文件已存在则自动添加编号后缀。
-        例如：若answers.json已存在，则返回answers_01.json等。
-        """
-        if not base_path.exists():
-            return base_path
-            
-        stem = base_path.stem
-        suffix = base_path.suffix
-        parent = base_path.parent
-        
-        counter = 1
-        while True:
-            new_filename = f"{stem}_{counter:02d}{suffix}"
-            new_path = parent / new_filename
-            
-            if not new_path.exists():
-                return new_path
-            counter += 1
 
-    def process_questions(
+    def vector_retrieve(
         self,
-        parent_document_retrieval: bool = False,
-        llm_reranking: bool = False,
-        llm_reranking_sample_size: int = 30,
-        top_n_retrieval: int = 10,
-        parallel_requests: int = 1,
-        pipeline_details: str = "",
-        submission_file: bool = True,
-        full_context: bool = False,
-        api_provider: str = "openai",
-        answering_model: str = "gpt-4-turbo",
-    ):
+        query: str,
+        company_code: str = "",
+        top_n: int = 3,
+        return_parent_pages: bool = False,
+        index_name: str = "default",
+    ) -> list[dict]:
         """
-        处理所有问题，生成答案文件。
-        问题处理相关参数均在调用时显式传入。
-        """
-        processor = QuestionsProcessor(
-            vector_db_dir=self.paths.vector_db_dir,
-            documents_dir=self.paths.documents_dir,
-            questions_file_path=self.paths.questions_file_path,
-            new_challenge_pipeline=True,
-            subset_path=self.paths.subset_path,
-            parent_document_retrieval=parent_document_retrieval,
-            llm_reranking=llm_reranking,
-            llm_reranking_sample_size=llm_reranking_sample_size,
-            top_n_retrieval=top_n_retrieval,
-            parallel_requests=parallel_requests,
-            api_provider=api_provider,
-            answering_model=answering_model,
-            full_context=full_context
-        )
-        
-        output_path = self._get_next_available_filename(self.paths.answers_file_path)
-        
-        _ = processor.process_all_questions(
-            output_path=output_path,
-            submission_file=submission_file,
-            pipeline_details=pipeline_details
-        )
-        print(f"Answers saved to {output_path}")
+        向量检索：在 ChromaDB 中按语义相似度检索文本块。
 
-    def answer_single_question(
-        self,
-        question: str,
-        kind: str = "string",
-        parent_document_retrieval: bool = False,
-        llm_reranking: bool = False,
-        llm_reranking_sample_size: int = 30,
-        top_n_retrieval: int = 10,
-        parallel_requests: int = 1,
-        api_provider: str = "openai",
-        answering_model: str = "gpt-4-turbo",
-        full_context: bool = False,
-    ):
+        参数：
+            query: 查询文本
+            company_code: 公司编码，用于 metadata 过滤；为空时使用 PipelineConfig.company_code
+            top_n: 返回结果数量上限
+            return_parent_pages: 为 True 时返回整页内容
+            index_name: ChromaDB collection 名称
         """
-        单条问题即时推理，返回结构化答案（dict）。
-        kind: 支持 'string'、'number'、'boolean'、'names' 等
-        """
-        t0 = time.time()
-        print("[计时] 开始初始化 QuestionsProcessor ...")
-        processor = QuestionsProcessor(
-            vector_db_dir=self.paths.vector_db_dir,
-            documents_dir=self.paths.documents_dir,
-            questions_file_path=None,  # 单问无需文件
-            new_challenge_pipeline=True,
-            subset_path=self.paths.subset_path,
-            parent_document_retrieval=parent_document_retrieval,
-            llm_reranking=llm_reranking,
-            llm_reranking_sample_size=llm_reranking_sample_size,
-            top_n_retrieval=top_n_retrieval,
-            parallel_requests=parallel_requests,
-            api_provider=api_provider,
-            answering_model=answering_model,
-            full_context=full_context
+        retriever = VectorRetriever(
+            vector_db_dir=self.config.vector_db_dir,
+            documents_dir=self.config.documents_dir,
+            index_name=index_name,
         )
-        t1 = time.time()
-        print(f"[计时] QuestionsProcessor 初始化耗时: {t1-t0:.2f} 秒")
-        print("[计时] 开始调用 process_single_question ...")
-        answer = processor.process_single_question(question, kind=kind)
-        t2 = time.time()
-        print(f"[计时] process_single_question 推理耗时: {t2-t1:.2f} 秒")
-        print(f"[计时] answer_single_question 总耗时: {t2-t0:.2f} 秒")
-        return answer
+        code = company_code or self.config.company_code
+        return retriever.retrieve(
+            company_code=code,
+            query=query,
+            top_n=top_n,
+            return_parent_pages=return_parent_pages,
+        )
+
+    def bm25_retrieve(
+        self,
+        query: str,
+        top_n: int = 3,
+        return_parent_pages: bool = False,
+        index_name: str = "default",
+    ) -> list[dict]:
+        """
+        关键词检索：在 BM25 索引中检索与 query 最相关的文本块。
+
+        参数：
+            query: 查询文本
+            top_n: 返回结果数量上限
+            return_parent_pages: 为 True 时返回整页内容
+            index_name: BM25 索引名称，对应 `{index_name}.pkl`
+        """
+        retriever = BM25Retriever(
+            bm25_db_dir=self.config.bm25_db_path,
+            documents_dir=self.config.documents_dir,
+            index_name=index_name,
+        )
+        return retriever.retrieve(
+            query=query,
+            top_n=top_n,
+            return_parent_pages=return_parent_pages,
+        )
+
+    def hybrid_retrieve(
+        self,
+        query: str,
+        company_code: str = "",
+        llm_reranking_sample_size: int = 28,
+        documents_batch_size: int = 10,
+        top_n: int = 6,
+        llm_weight: float = 0.7,
+        return_parent_pages: bool = False,
+    ) -> list[dict]:
+        """
+        混合检索：向量召回 + LLM 重排。
+
+        参数：
+            query: 查询文本
+            company_code: 公司编码，用于向量召回阶段的 metadata 过滤；为空时使用 PipelineConfig.company_code
+            llm_reranking_sample_size: 首轮向量召回候选数
+            documents_batch_size: 每批送入 LLM 重排的文档数
+            top_n: 最终返回结果数
+            llm_weight: LLM 分数权重（0-1）
+            return_parent_pages: 为 True 时返回整页内容
+        """
+        retriever = HybridRetriever(
+            vector_db_dir=self.config.vector_db_dir,
+            documents_dir=self.config.documents_dir,
+        )
+        code = company_code or self.config.company_code
+        return retriever.retrieve(
+            company_code=code,
+            query=query,
+            llm_reranking_sample_size=llm_reranking_sample_size,
+            documents_batch_size=documents_batch_size,
+            top_n=top_n,
+            llm_weight=llm_weight,
+            return_parent_pages=return_parent_pages,
+        )
 
 
 if __name__ == "__main__":
@@ -333,25 +312,35 @@ if __name__ == "__main__":
     print('root_path:', root_path)
     #print(type(root_path))
     # 初始化主流程
-    pipeline = Pipeline(root_path)
+    pipeline = Pipeline(PipelineConfig.from_root(root_path))
     
-    # print('4. 将pdf转化为纯markdown文本')
+    # print('将pdf转化为纯markdown文本')
     # pipeline.export_reports_to_markdown('【财报】中芯国际：中芯国际2024年年度报告.pdf') 
 
+    # print('将MinerU解析后的JSON报告规整为标准报告结构')
+    # pipeline.merge_mineru_reports(reports_dir=root_path / "debug_data")
+
     # 5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports
-    # print('5. 将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports')
+    # print('将规整后报告分块，便于后续向量化，输出到 databases/chunked_reports')
     # pipeline.chunk_reports2() 
     
     # 6. 从分块报告创建向量数据库，输出到 databases/vector_dbs
-    # print('6. 从分块报告创建向量数据库，输出到 databases/vector_dbs')
+    # print('从分块报告创建向量数据库，输出到 databases/vector_dbs')
     # pipeline.create_vector_dbs()     
+
+    print('向量检索')
+    pipeline.vector_retrieve(query="工程总投资")
 
     # print("bm25关键词构建-------")
     # pipeline.create_bm25_db()
-    
-    # 7. 处理问题并生成答案，具体逻辑由 process_questions 参数决定
-    # 默认questions.json
-    # print('7. 处理问题并生成答案，具体逻辑由 process_questions 参数决定')
-    # pipeline.process_questions() 
+
+    # print('向量检索')
+    # pipeline.vector_retrieve(query="工程总投资")
+
+    # print('关键词检索')
+    # pipeline.bm25_retrieve(query="工程总投资")
+
+    # print('混合检索')
+    # pipeline.hybrid_retrieve(query="工程总投资")
     
     print('完成')

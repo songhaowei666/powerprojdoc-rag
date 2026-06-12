@@ -34,9 +34,21 @@ pyprojroot
 
 ### 3.1 PipelineConfig
 
-路径配置类，根据 `root_path` 与运行参数初始化所有流程目录与文件路径。
+路径与目录配置类，根据 `root_path` 与运行参数初始化所有流程目录与文件路径。
 
-关键路径：
+**字段**：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `root_path` | `Path` | — | 数据集根目录 |
+| `subset_name` | `str` | `"subset.csv"` | 子集元数据文件名 |
+| `questions_file_name` | `str` | `"questions.json"` | 问题文件名 |
+| `pdf_reports_dir_name` | `str` | `"pdf_reports"` | PDF 报告目录名 |
+| `use_serialized_tables` | `bool` | `False` | 是否使用序列化表格，影响数据库和 merged 目录后缀 |
+| `config_suffix` | `str` | `""` | 配置后缀，影响 answers 文件名 |
+| `company_code` | `str` | `"001"` | 公司编码，写入 merge 后报告的 metainfo |
+
+**派生路径**（在 `__post_init__` 中计算）：
 - `subset_path`：`root_path / subset_name`
 - `questions_file_path`：`root_path / questions_file_name`
 - `pdf_reports_dir`：`root_path / pdf_reports_dir_name`
@@ -48,40 +60,26 @@ pyprojroot
 - `merged_reports_path`：`debug_data_path / f"02_merged_reports{suffix}"`
 - `reports_markdown_path`：`debug_data_path / f"03_reports_markdown{suffix}"`
 
+**便捷构造**：
+
+```python
+PipelineConfig.from_root(root_path, **overrides)  # 等价于 PipelineConfig(root_path=root_path, ...)
+```
+
 ## 4. Pipeline 方法
 
 ### 4.1 初始化与路径
 
 ```python
 class Pipeline:
-    def __init__(
-        self,
-        root_path: Path,
-        subset_name: str = "subset.csv",
-        questions_file_name: str = "questions.json",
-        pdf_reports_dir_name: str = "pdf_reports",
-        use_serialized_tables: bool = False,
-        config_suffix: str = "",
-    )
+    def __init__(self, config: PipelineConfig)
     
     def _convert_json_to_csv_if_needed(self)
 ```
 
 **初始化流程**：
-1. 保存 `use_serialized_tables` 和 `config_suffix`
-2. 直接实例化 `PipelineConfig(...)` 并赋值给 `self.paths`
-3. 调用 `_convert_json_to_csv_if_needed()`
-
-**初始化参数**：
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `root_path` | `Path` | — | 数据集根目录 |
-| `subset_name` | `str` | `"subset.csv"` | 子集元数据文件名 |
-| `questions_file_name` | `str` | `"questions.json"` | 问题文件名 |
-| `pdf_reports_dir_name` | `str` | `"pdf_reports"` | PDF 报告目录名 |
-| `use_serialized_tables` | `bool` | `False` | 是否使用序列化表格，影响数据库和 merged 目录后缀 |
-| `config_suffix` | `str` | `""` | 配置后缀，影响 answers 文件名和数据库目录名 |
+1. 接收 `PipelineConfig` 实例并赋值给 `self.config`
+2. 调用 `_convert_json_to_csv_if_needed()`
 
 ### 4.2 PDF 与 Markdown 处理
 
@@ -110,13 +108,13 @@ def merge_mineru_reports(
 - 两者互斥提供，至少传一个；同时传入时，`reports_paths` 优先
 
 **默认行为**：
-- `output_dir` 固定使用 `self.paths.merged_reports_path`
-- `subset_csv` 固定使用 `self.paths.subset_path`
+- `output_dir` 固定使用 `self.config.merged_reports_path`
+- `company_code` 固定使用 `self.config.company_code`（默认 `"001"`）
 
 **处理流程**：
 1. 延迟导入 `src.markdown_reports_merging.MinerUReportMerger`
 2. 实例化 `MinerUReportMerger`
-3. 调用 `process_reports(...)`，传入 `reports_dir`、`reports_paths`、`output_dir`、`subset_csv`
+3. 调用 `process_reports(...)`，传入 `reports_dir`、`reports_paths`、`output_dir`、`company_code`
 4. 打印处理数量
 5. 返回规整后的报告对象列表
 
@@ -126,58 +124,78 @@ def merge_mineru_reports(
 
 - `chunk_reports(self, include_serialized_tables: bool = False)`：Markdown 报告分块
 - `chunk_reports2(self, include_serialized_tables: bool = False)`：通用报告分块
-- `create_vector_dbs(self)`：创建向量数据库
-- `create_bm25_db(self)`：创建 BM25 索引
+- `create_vector_dbs(self)`：创建向量数据库，chunk metadata 的 `company_code` 取自分块 JSON 的 `metainfo`
+- `create_bm25_db(self)`：创建 BM25 索引，同上
 
-### 4.5 问题回答
+### 4.5 向量检索
 
-#### process_questions
+#### vector_retrieve
 
 ```python
-def process_questions(
+def vector_retrieve(
     self,
-    parent_document_retrieval: bool = False,
-    llm_reranking: bool = False,
-    llm_reranking_sample_size: int = 30,
-    top_n_retrieval: int = 10,
-    parallel_requests: int = 1,
-    pipeline_details: str = "",
-    submission_file: bool = True,
-    full_context: bool = False,
-    api_provider: str = "openai",
-    answering_model: str = "gpt-4-turbo",
-)
+    query: str,
+    company_code: str = "",
+    top_n: int = 3,
+    return_parent_pages: bool = False,
+    index_name: str = "default",
+) -> list[dict]
 ```
 
-批量处理问题并生成答案文件。所有问题处理相关参数均在调用时显式传入，不再依赖全局 RunConfig。
+在 `self.config.vector_db_dir` 的 ChromaDB 向量库中检索与 query 最相关的文本块。
 
-#### answer_single_question
+**参数**：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `query` | `str` | — | 查询文本 |
+| `company_code` | `str` | `""` | 公司编码，用于 metadata 过滤；为空时使用 `PipelineConfig.company_code` |
+| `top_n` | `int` | `3` | 返回结果数量上限 |
+| `return_parent_pages` | `bool` | `False` | 为 True 时返回整页内容 |
+| `index_name` | `str` | `"default"` | ChromaDB collection 名称 |
+
+**实现**：实例化 `VectorRetriever`，传入 `vector_db_dir`、`documents_dir`，调用 `retrieve(...)`。
+
+**返回**：`list[dict]`，每项含 `distance`、`page`、`text`。
+
+#### bm25_retrieve
 
 ```python
-def answer_single_question(
+def bm25_retrieve(
     self,
-    question: str,
-    kind: str = "string",
-    parent_document_retrieval: bool = False,
-    llm_reranking: bool = False,
-    llm_reranking_sample_size: int = 30,
-    top_n_retrieval: int = 10,
-    parallel_requests: int = 1,
-    api_provider: str = "openai",
-    answering_model: str = "gpt-4-turbo",
-    full_context: bool = False,
-)
+    query: str,
+    top_n: int = 3,
+    return_parent_pages: bool = False,
+    index_name: str = "default",
+) -> list[dict]
 ```
 
-单条问题即时推理，返回结构化答案。
+在 `self.config.bm25_db_path` 的 BM25 索引中做关键词检索。
 
-#### _get_next_available_filename
+**实现**：实例化 `BM25Retriever`，传入 `bm25_db_path`、`documents_dir`，调用 `retrieve(...)`。
+
+**返回**：`list[dict]`，每项含 `distance`（BM25 分数）、`page`、`text`。
+
+#### hybrid_retrieve
 
 ```python
-def _get_next_available_filename(self, base_path: Path) -> Path
+def hybrid_retrieve(
+    self,
+    query: str,
+    company_code: str = "",
+    llm_reranking_sample_size: int = 28,
+    documents_batch_size: int = 10,
+    top_n: int = 6,
+    llm_weight: float = 0.7,
+    return_parent_pages: bool = False,
+) -> list[dict]
 ```
 
-获取不重复文件名。
+向量召回 + LLM 重排的混合检索。
+
+**实现**：实例化 `HybridRetriever`，传入 `vector_db_dir`、`documents_dir`，调用 `retrieve(...)`。
+
+**返回**：`list[dict]`，经重排后的文档列表（含 `distance`、`page`、`text` 等）。
 
 ---
 
@@ -194,14 +212,13 @@ def _get_next_available_filename(self, base_path: Path) -> Path
 | T5 | subset.csv 不存在 | MinerUReportMerger 使用空元数据映射，不报错 |
 | T6 | 输入为空 | 返回空列表 |
 
-### 5.2 问题回答参数
+### 5.2 检索方法
 
 | # | 测试场景 | 预期行为 |
 |---|---------|---------|
-| T7 | 使用默认参数调用 `process_questions` | 使用默认模型和默认检索参数正常执行 |
-| T8 | 显式传入 `answering_model` 和 `parallel_requests` | QuestionsProcessor 接收对应参数 |
-| T9 | 启用 `llm_reranking` | QuestionsProcessor 接收 `llm_reranking=True` |
-| T10 | 启用 `parent_document_retrieval` | QuestionsProcessor 接收 `parent_document_retrieval=True` |
+| T7 | 调用 `vector_retrieve` | 返回 ChromaDB 相似度检索结果 |
+| T8 | 调用 `bm25_retrieve` | 返回 BM25 关键词检索结果 |
+| T9 | 调用 `hybrid_retrieve` | 返回 LLM 重排后的混合检索结果 |
 
 ---
 
@@ -221,4 +238,4 @@ def _get_next_available_filename(self, base_path: Path) -> Path
 |------|------|----------|
 | v1.0 | 2024-XX-XX | 初始实现，支持 PDF 解析、分块、索引、问答流程 |
 | v1.1 | 2026-06-12 | 新增 `merge_mineru_reports` 方法，支持调用 MinerUReportMerger 批量规整 JSON 报告 |
-| v1.2 | 2026-06-12 | 移除 `RunConfig`，将路径相关参数平铺到 `Pipeline.__init__`，将问题处理参数平铺到 `process_questions` / `answer_single_question` 方法参数 |
+| v1.6 | 2026-06-12 | 移除 `process_questions`；新增 `bm25_retrieve`、`hybrid_retrieve` |
