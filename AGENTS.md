@@ -27,7 +27,7 @@
 ## 用法
 - 修改核心逻辑时，**必须同步更新对应 spec 文档 **，并回复用户更改的spec文件，如果没有找到spec文档，就不要修改代码。
 - 所有环境变量、API Key、模型名称统一通过 `config/settings.py` 管理：
-- 
+- python环境优先查看 .vscode 中指定的 python.defaultInterpreterPath
 
 
 

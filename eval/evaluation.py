@@ -6,7 +6,7 @@ RAG 评估模块。
 2. SingleTurnEvaluator：对单次 RAG 调用进行轻量打分，可用于线上监控
 
 用法：
-    from src.evaluation import EvalDataset, RAGEvaluator
+    from eval.evaluation import EvalDataset, RAGEvaluator
 
     dataset = EvalDataset.from_json(Path("eval/eval_dataset.json"))
     evaluator = RAGEvaluator()

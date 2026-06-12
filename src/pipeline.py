@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # from src.pdf_parsing import PDFParser
 from src import pdf_mineru
 from src.parsed_reports_merging import PageTextPreparation
+from src.markdown_reports_merging import MinerUReportMerger
 from src.text_splitter import TextSplitter
 from src.ingestion import VectorDBIngestor
 from src.ingestion import BM25Ingestor
@@ -52,67 +53,32 @@ class PipelineConfig:
         self.merged_reports_path = self.debug_data_path / self.merged_reports_dirname
         self.reports_markdown_path = self.debug_data_path / self.reports_markdown_dirname
 
-@dataclass
-class RunConfig:
-    # 运行流程参数配置
-    use_serialized_tables: bool = False
-    parent_document_retrieval: bool = False
-    use_vector_dbs: bool = True
-    use_bm25_db: bool = False
-    llm_reranking: bool = False
-    llm_reranking_sample_size: int = 30
-    top_n_retrieval: int = 10
-    parallel_requests: int = 1 # 并行的数量，需要限制，否则qwen-turbo会超出阈值
-    pipeline_details: str = ""
-    submission_file: bool = True
-    full_context: bool = False
-    api_provider: str = "openai" #openai
-    answering_model: str = "gpt-4-turbo" # gpt-4o-mini-2024-07-18 or "gpt-4o-2024-08-06"
-    config_suffix: str = ""
-
 class Pipeline:
-    def __init__(self, root_path: Path, subset_name: str = "subset.csv", questions_file_name: str = "questions.json", pdf_reports_dir_name: str = "pdf_reports", run_config: RunConfig = RunConfig()):
+    def __init__(
+        self,
+        root_path: Path,
+        subset_name: str = "subset.csv",
+        questions_file_name: str = "questions.json",
+        pdf_reports_dir_name: str = "pdf_reports",
+        use_serialized_tables: bool = False,
+        config_suffix: str = "",
+    ):
         # 初始化主流程，加载路径和配置
-        self.run_config = run_config
-        self.paths = self._initialize_paths(root_path, subset_name, questions_file_name, pdf_reports_dir_name)
-        self._convert_json_to_csv_if_needed()
-
-    def _initialize_paths(self, root_path: Path, subset_name: str, questions_file_name: str, pdf_reports_dir_name: str) -> PipelineConfig:
-        """根据配置初始化所有路径"""
-        return PipelineConfig(
+        self.use_serialized_tables = use_serialized_tables
+        self.config_suffix = config_suffix
+        self.paths = PipelineConfig(
             root_path=root_path,
             subset_name=subset_name,
             questions_file_name=questions_file_name,
             pdf_reports_dir_name=pdf_reports_dir_name,
-            serialized=self.run_config.use_serialized_tables,
-            config_suffix=self.run_config.config_suffix
+            serialized=use_serialized_tables,
+            config_suffix=config_suffix
         )
+        self._convert_json_to_csv_if_needed()
 
     def _convert_json_to_csv_if_needed(self):
-        """
-        检查是否存在subset.json且无subset.csv，若是则自动转换为CSV。
-        """
-        json_path = self.paths.root_path / "subset.json"
-        csv_path = self.paths.root_path / "subset.csv"
-        
-        if json_path.exists() and not csv_path.exists():
-            try:
-                with open(json_path, 'r') as f:
-                    data = json.load(f)
-                
-                df = pd.DataFrame(data)
-                
-                df.to_csv(csv_path, index=False)
-                
-            except Exception as e:
-                print(f"Error converting JSON to CSV: {str(e)}")
 
-    # @staticmethod
-    # def download_docling_models(): 
-    #     # 下载Docling所需模型，避免首次运行时自动下载
-    #     logging.basicConfig(level=logging.DEBUG)
-    #     parser = PDFParser(output_dir=here())
-    #     parser.parse_and_export(input_doc_paths=[here() / "src/dummy_report.pdf"])
+
 
     def parse_pdf_reports_parallel(self, chunk_size: int = 2, max_workers: int = 10):
         """多进程并行解析PDF报告，提升处理效率
@@ -162,6 +128,30 @@ class Pipeline:
         shutil.move(md_path, target_path)
         print(f"已将 {md_path} 移动到 {target_path}")
 
+    def merge_mineru_reports(
+        self,
+        reports_dir: Path = None,
+        reports_paths: list[Path] = None,
+    ) -> list[dict]:
+        """
+        将 MinerU 解析后的 JSON 报告批量规整为标准报告结构（metainfo + content.pages）。
+
+        参数：
+            reports_dir: 输入 JSON 文件目录，自动收集该目录下所有 *.json
+            reports_paths: 输入 JSON 文件路径列表
+        返回：
+            规整后的报告对象列表，每个元素为 {"metainfo": ..., "content": ...}
+        """
+        merger = MinerUReportMerger()
+        reports = merger.process_reports(
+            reports_dir=reports_dir,
+            reports_paths=reports_paths,
+            output_dir=self.paths.merged_reports_path,
+            subset_csv=self.paths.subset_path,
+        )
+        print(f"Merged {len(reports)} reports into {self.paths.merged_reports_path}")
+        return reports
+    
     def chunk_reports(self, include_serialized_tables: bool = False):
         """
         将规整后 markdown 报告分块，便于后续向量化和检索
@@ -251,34 +241,61 @@ class Pipeline:
                 return new_path
             counter += 1
 
-    def process_questions(self):
-        # 处理所有问题，生成答案文件
+    def process_questions(
+        self,
+        parent_document_retrieval: bool = False,
+        llm_reranking: bool = False,
+        llm_reranking_sample_size: int = 30,
+        top_n_retrieval: int = 10,
+        parallel_requests: int = 1,
+        pipeline_details: str = "",
+        submission_file: bool = True,
+        full_context: bool = False,
+        api_provider: str = "openai",
+        answering_model: str = "gpt-4-turbo",
+    ):
+        """
+        处理所有问题，生成答案文件。
+        问题处理相关参数均在调用时显式传入。
+        """
         processor = QuestionsProcessor(
             vector_db_dir=self.paths.vector_db_dir,
             documents_dir=self.paths.documents_dir,
             questions_file_path=self.paths.questions_file_path,
             new_challenge_pipeline=True,
             subset_path=self.paths.subset_path,
-            parent_document_retrieval=self.run_config.parent_document_retrieval,
-            llm_reranking=self.run_config.llm_reranking,
-            llm_reranking_sample_size=self.run_config.llm_reranking_sample_size,
-            top_n_retrieval=self.run_config.top_n_retrieval,
-            parallel_requests=self.run_config.parallel_requests,
-            api_provider=self.run_config.api_provider,
-            answering_model=self.run_config.answering_model,
-            full_context=self.run_config.full_context            
+            parent_document_retrieval=parent_document_retrieval,
+            llm_reranking=llm_reranking,
+            llm_reranking_sample_size=llm_reranking_sample_size,
+            top_n_retrieval=top_n_retrieval,
+            parallel_requests=parallel_requests,
+            api_provider=api_provider,
+            answering_model=answering_model,
+            full_context=full_context
         )
         
         output_path = self._get_next_available_filename(self.paths.answers_file_path)
         
         _ = processor.process_all_questions(
             output_path=output_path,
-            submission_file=self.run_config.submission_file,
-            pipeline_details=self.run_config.pipeline_details
+            submission_file=submission_file,
+            pipeline_details=pipeline_details
         )
         print(f"Answers saved to {output_path}")
 
-    def answer_single_question(self, question: str, kind: str = "string"):
+    def answer_single_question(
+        self,
+        question: str,
+        kind: str = "string",
+        parent_document_retrieval: bool = False,
+        llm_reranking: bool = False,
+        llm_reranking_sample_size: int = 30,
+        top_n_retrieval: int = 10,
+        parallel_requests: int = 1,
+        api_provider: str = "openai",
+        answering_model: str = "gpt-4-turbo",
+        full_context: bool = False,
+    ):
         """
         单条问题即时推理，返回结构化答案（dict）。
         kind: 支持 'string'、'number'、'boolean'、'names' 等
@@ -291,14 +308,14 @@ class Pipeline:
             questions_file_path=None,  # 单问无需文件
             new_challenge_pipeline=True,
             subset_path=self.paths.subset_path,
-            parent_document_retrieval=self.run_config.parent_document_retrieval,
-            llm_reranking=self.run_config.llm_reranking,
-            llm_reranking_sample_size=self.run_config.llm_reranking_sample_size,
-            top_n_retrieval=self.run_config.top_n_retrieval,
-            parallel_requests=1,
-            api_provider=self.run_config.api_provider,
-            answering_model=self.run_config.answering_model,
-            full_context=self.run_config.full_context
+            parent_document_retrieval=parent_document_retrieval,
+            llm_reranking=llm_reranking,
+            llm_reranking_sample_size=llm_reranking_sample_size,
+            top_n_retrieval=top_n_retrieval,
+            parallel_requests=parallel_requests,
+            api_provider=api_provider,
+            answering_model=answering_model,
+            full_context=full_context
         )
         t1 = time.time()
         print(f"[计时] QuestionsProcessor 初始化耗时: {t1-t0:.2f} 秒")
@@ -309,54 +326,14 @@ class Pipeline:
         print(f"[计时] answer_single_question 总耗时: {t2-t0:.2f} 秒")
         return answer
 
-preprocess_configs = {"ser_tab": RunConfig(use_serialized_tables=True),
-                      "no_ser_tab": RunConfig(use_serialized_tables=False)}
 
-base_config = RunConfig(
-    parallel_requests=10,
-    submission_file=True,
-    pipeline_details="Custom pdf parsing + vDB + Router + SO CoT; llm = GPT-4o-mini",
-    config_suffix="_base"
-)
-
-parent_document_retrieval_config = RunConfig(
-    parent_document_retrieval=True,
-    parallel_requests=20,
-    submission_file=True,
-    pipeline_details="Custom pdf parsing + vDB + Router + Parent Document Retrieval + SO CoT; llm = GPT-4o",
-    answering_model="gpt-4o-2024-08-06",
-    config_suffix="_pdr"
-)
-
-## 这里
-max_config = RunConfig(
-    use_serialized_tables=False,
-    parent_document_retrieval=True,
-    llm_reranking=True,
-    parallel_requests=4,
-    submission_file=True,
-    pipeline_details="Custom pdf parsing + vDB + Router + Parent Document Retrieval + reranking + SO CoT; llm = qwen-turbo",
-    answering_model="qwen-turbo-latest",
-    config_suffix="_qwen_turbo"
-)
-
-
-configs = {"base": base_config,
-           "pdr": parent_document_retrieval_config,
-           "max": max_config}
-
-
-# 你可以直接在本文件中运行任意方法：
-# python .\src\pipeline.py
-# 只需取消你想运行的方法的注释即可
-# 你也可以修改 run_config 以尝试不同的配置
 if __name__ == "__main__":
     # 设置数据集根目录（此处以 test_set 为例）
     root_path = here() / "data" / "stock_data"
     print('root_path:', root_path)
     #print(type(root_path))
-    # 初始化主流程，使用推荐的最佳配置
-    pipeline = Pipeline(root_path, run_config=max_config)
+    # 初始化主流程
+    pipeline = Pipeline(root_path)
     
     # print('4. 将pdf转化为纯markdown文本')
     # pipeline.export_reports_to_markdown('【财报】中芯国际：中芯国际2024年年度报告.pdf') 
@@ -369,12 +346,12 @@ if __name__ == "__main__":
     # print('6. 从分块报告创建向量数据库，输出到 databases/vector_dbs')
     # pipeline.create_vector_dbs()     
 
-    print("bm25关键词构建-------")
-    pipeline.create_bm25_db()
+    # print("bm25关键词构建-------")
+    # pipeline.create_bm25_db()
     
-    # 7. 处理问题并生成答案，具体逻辑取决于 run_config
+    # 7. 处理问题并生成答案，具体逻辑由 process_questions 参数决定
     # 默认questions.json
-    # print('7. 处理问题并生成答案，具体逻辑取决于 run_config')
+    # print('7. 处理问题并生成答案，具体逻辑由 process_questions 参数决定')
     # pipeline.process_questions() 
     
     print('完成')

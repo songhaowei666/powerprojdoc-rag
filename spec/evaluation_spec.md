@@ -1,12 +1,12 @@
 # Evaluation Module Spec
 
-> **同步声明**：本文档描述 `src/evaluation.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
+> **同步声明**：本文档描述 `eval/evaluation.py` 当前实现，用于后续代码修改时保持行为一致。若代码实现变更，必须同步更新本文档。
 
 ---
 
 ## 1. 概述
 
-`evaluation.py` 是 RAG 系统的评估模块，提供**离线批量评估**与**单条实时评估**两种能力。模块基于 ragas 框架计算标准 RAG 指标，同时自定义「页面精确率」以适配本项目「按页面检索」的场景。
+`eval/evaluation.py` 是 RAG 系统的评估模块，所有评估代码统一放在 `eval/` 目录下。该模块提供**离线批量评估**与**单条实时评估**两种能力。模块基于 ragas 框架计算标准 RAG 指标，同时自定义「页面精确率」以适配本项目「按页面检索」的场景。
 
 评估不引入 trulens，全部指标由 ragas + 自定义逻辑覆盖；单条实时评估接口可直接嵌入生产链路做轻量监控。
 
@@ -267,7 +267,7 @@ class SingleTurnEvaluator:
 
 ```python
 from pathlib import Path
-from src.evaluation import EvalDataset, RAGEvaluator
+from eval.evaluation import EvalDataset, RAGEvaluator
 
 dataset = EvalDataset.from_json(Path("eval/eval_dataset.json"))
 evaluator = RAGEvaluator()
@@ -280,7 +280,7 @@ print(f"平均页面精确率: {df['page_precision@k'].mean()}")
 ### 8.2 单条实时评估
 
 ```python
-from src.evaluation import SingleTurnEvaluator
+from eval.evaluation import SingleTurnEvaluator
 from langchain_core.documents import Document
 
 evaluator = SingleTurnEvaluator()
@@ -313,4 +313,5 @@ print(result)
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v1.1 | 2026-06-12 | 将评估模块从 `src/evaluation.py` 迁移到 `eval/evaluation.py`，评估代码统一放入 `eval/` 目录 |
 | v1.0 | 2026-06-11 | 初始版本；定义评估集 schema、page_precision@k、ragas 五指标、批量/单条两种评估器 |

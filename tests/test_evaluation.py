@@ -1,5 +1,5 @@
 """
-Tests for src/evaluation.py
+Tests for eval/evaluation.py
 
 Follows TDD principles: tests are written against the spec in spec/evaluation_spec.md.
 Run with: pytest tests/test_evaluation.py -v
@@ -17,7 +17,7 @@ from langchain_core.documents import Document
 # Ensure src is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.evaluation import (
+from eval.evaluation import (
     EvalDataset,
     RAGEvaluator,
     SingleTurnEvaluator,
@@ -171,7 +171,7 @@ class TestComputePagePrecisionAtK:
 class TestSingleTurnEvaluator:
     """Tests for SingleTurnEvaluator."""
 
-    @patch("src.evaluation.evaluate")
+    @patch("eval.evaluation.evaluate")
     def test_evaluate_returns_expected_keys(self, mock_evaluate, mock_ragas_result, mock_llm):
         mock_evaluate.return_value = mock_ragas_result
 
@@ -193,7 +193,7 @@ class TestSingleTurnEvaluator:
         assert result["answer_relevancy"] == 0.85
         assert result["answer_correctness"] == 0.75
 
-    @patch("src.evaluation.evaluate")
+    @patch("eval.evaluation.evaluate")
     def test_evaluate_no_expected_pages(self, mock_evaluate, mock_ragas_result, mock_llm):
         mock_evaluate.return_value = mock_ragas_result
 
@@ -206,7 +206,7 @@ class TestSingleTurnEvaluator:
 
         assert result["page_precision@k"] is None
 
-    @patch("src.evaluation.evaluate")
+    @patch("eval.evaluation.evaluate")
     def test_evaluate_ragas_failure(self, mock_evaluate, mock_llm):
         mock_evaluate.side_effect = RuntimeError("ragas error")
 
@@ -227,7 +227,7 @@ class TestSingleTurnEvaluator:
 class TestRAGEvaluator:
     """Tests for RAGEvaluator."""
 
-    @patch("src.evaluation.evaluate")
+    @patch("eval.evaluation.evaluate")
     def test_run_batch_returns_dataframe(self, mock_evaluate, mock_ragas_result, mock_llm, sample_eval_json):
         mock_evaluate.return_value = mock_ragas_result
 
@@ -265,7 +265,7 @@ class TestRAGEvaluator:
         mock_rag_app.run.assert_any_call("Q1", "示例科技")
         mock_rag_app.run.assert_any_call("Q2", "示例科技")
 
-    @patch("src.evaluation.evaluate")
+    @patch("eval.evaluation.evaluate")
     def test_run_batch_rag_failure_continues(self, mock_evaluate, mock_ragas_result, mock_llm, sample_eval_json):
         mock_evaluate.return_value = mock_ragas_result
 
@@ -291,7 +291,7 @@ class TestRAGEvaluator:
         assert df.loc[1, "page_precision@k"] == 0.5
         assert df.loc[1, "faithfulness"] == 0.85
 
-    @patch("src.evaluation.evaluate")
+    @patch("eval.evaluation.evaluate")
     def test_run_batch_ragas_failure_raises(self, mock_evaluate, mock_llm, sample_eval_json):
         mock_evaluate.side_effect = RuntimeError("ragas 失败")
 

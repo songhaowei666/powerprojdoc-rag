@@ -1,0 +1,810 @@
+{
+  "pdf_info": [
+    {
+      "page_idx": 0,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "华东电网500kV输变电工程"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "title",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "2024年度建设报告"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 2,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "国家电网有限公司建设部及项目各参建单位保证本报告内容不存在任何虚假记载、误导性陈述或者重大遗漏，并对其内容的真实性、准确性和完整性承担法律责任。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第一节 项目概况与编制说明"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "本项目是国家电网有限公司为提升华东区域电力输送能力、保障长三角地区经济社会高质量发展而重点建设的输变电工程。项目建设地点位于江苏省苏州市、浙江省嘉兴市境内，线路全长约128公里，其中双回路架空线路118公里，电缆线路10公里。新建500kV变电站2座，扩建500kV变电站1座，新增变电容量1000万千伏安。项目于2023年取得国家发展改革委核准批复，2023年底正式开工建设，计划2025年建成投运。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 2,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二节 工程投资与主要技术指标"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "html": "<table><tr><th>项目</th><th>2024年</th><th>2023年</th></tr><tr><td>工程总投资（万元）</td><td>486,520</td><td>320,150</td></tr><tr><td>当年完成投资（万元）</td><td>166,370</td><td>128,450</td></tr><tr><td>架空线路长度（公里）</td><td>118</td><td>0</td></tr><tr><td>电缆线路长度（公里）</td><td>10</td><td>0</td></tr><tr><td>新增变电容量（万千伏安）</td><td>1,000</td><td>0</td></tr></table>"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 2,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "以上数据经国家电网有限公司审计部审核，具体详见本报告第十二节工程财务决算与审计报告。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 3,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第三节 工程建设进度与质量管控"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "截至2024年12月31日，工程已完成基础施工、铁塔组立、导线展放等关键工序。其中，苏州侧变电站主体工程已完成土建施工90%，电气安装完成60%；嘉兴侧变电站土建施工完成85%，电气安装完成55%。线路工程已完成通道清理118公里，铁塔组立215基，导线展放98公里。工程整体质量处于受控状态，分项工程一次验收合格率达到99.2%，未发生因施工质量导致的返工事件。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 4,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第四节 安全环保与社会效益"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "本项目严格执行国家及行业安全生产标准，建立健全安全风险分级管控和隐患排查治理双重预防机制。全年开展安全专项检查42次，排查治理隐患156项，未发生重伤及以上人身伤亡事故，未发生一般及以上设备事故。在环保方面，严格落实环评批复要求，控制施工扬尘、噪声和植被扰动范围，临时占地复绿率达到95%以上。工程建成投运后，预计每年可新增输送电量约120亿千瓦时，有效缓解长三角地区电力供需矛盾，提升电网安全稳定运行水平，为区域清洁能源消纳和『双碳』目标实现提供有力支撑。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 5,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第五节 项目建设目标"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "华东电网500kV输变电工程的建设目标是提升华东区域主干网架输电能力和供电可靠性，满足负荷增长、新能源接入以及跨区电力互济需求。项目建成后将强化苏南、浙北负荷中心之间的电气联系，提高长三角重点城市群供电保障能力。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 6,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第六节 目标分解与年度安排"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "围绕安全、质量、进度、投资和环保五个方面，项目部将年度目标分解到设计、物资、施工、监理和属地协调等责任主体。2024年重点完成线路通道贯通、基础施工收尾、变电站主体土建和关键电气设备安装准备。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 7,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第七节 2024年度主要建设内容"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "2024年度，工程主要完成线路基础施工、部分杆塔组立、变电站土建施工和关键设备到货验收等工作。苏州侧完成主控楼封顶、GIS基础浇筑和站内道路基层施工；嘉兴侧完成主变基础、构支架基础和消防水池主体施工。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 8,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第八节 线路工程完成情况"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "线路工程全年完成基础浇筑236基、杆塔组立215基、导地线展放98公里，跨越高速铁路、国省干线和重要河道的专项施工方案均完成专家论证。施工单位对高塔组立、张力放线和跨越封网等关键作业实施旁站管理。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 9,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第九节 变电工程完成情况"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "变电工程方面，苏州侧变电站完成土建施工90%、电气安装60%，嘉兴侧变电站完成土建施工85%、电气安装55%。扩建站完成间隔基础、二次屏柜基础和保护小室改造，为后续一次设备就位创造条件。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 10,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十节 物资供应与设备验收"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "html": "<table><tr><th>设备类别</th><th>计划到货</th><th>实际到货</th><th>验收结论</th></tr><tr><td>主变压器</td><td>4台</td><td>3台</td><td>合格</td></tr><tr><td>GIS组合电器</td><td>18间隔</td><td>16间隔</td><td>合格</td></tr><tr><td>保护屏柜</td><td>86面</td><td>82面</td><td>合格</td></tr><tr><td>导线及金具</td><td>128公里配套</td><td>118公里配套</td><td>合格</td></tr></table>"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 11,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十一节 工程投资执行情况"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "截至2024年末，工程累计完成投资486520万元，年度完成投资166370万元，投资完成率与实物工程量基本匹配。费用主要用于线路基础、杆塔材料、变电土建、设备采购、属地协调和安全文明施工措施。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 12,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十二节 质量检查与验收结论"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "监理单位组织开展原材料见证取样、隐蔽工程验收和关键工序旁站检查。全年完成质量抽检312批次，发现一般质量问题28项，均已完成闭环整改。分项工程一次验收合格率为99.2%，未发生重大质量事件。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 13,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十三节 计划投产时间"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "华东电网500kV输变电工程计划在2025年完成整体投产。根据年度建设计划，2025年上半年完成剩余设备安装、单体调试和分系统调试，2025年下半年完成系统联调、启动验收和并网投运，具体节点以调度安排为准。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 14,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十四节 后续里程碑计划"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "html": "<table><tr><th>里程碑</th><th>计划时间</th><th>责任单位</th></tr><tr><td>主变全部到货</td><td>2025年3月</td><td>物资公司</td></tr><tr><td>变电站电气安装完成</td><td>2025年5月</td><td>施工项目部</td></tr><tr><td>线路全线贯通</td><td>2025年6月</td><td>线路施工单位</td></tr><tr><td>启动验收</td><td>2025年9月</td><td>建设管理单位</td></tr></table>"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 15,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十五节 征地拆迁与属地协调"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "项目沿线涉及多处临时用地、林地手续和跨越协调。建设管理单位建立属地协调周例会机制，重点推进杆塔永久占地补偿、施工便道恢复、跨越许可办理和地方管线迁改，确保现场施工面连续稳定。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 16,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十六节 安全文明施工总体要求"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "工程安全管理坚持管业务必须管安全、管生产必须管安全的原则，落实建设、监理、施工和分包单位安全责任。现场统一设置安全围栏、警示标识、临时消防设施和视频监控点，严格执行作业票、风险交底和到岗到位要求。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 17,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十七节 安全管理措施"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "华东电网500kV输变电工程通过落实安全责任制、开展班前安全交底、加强高风险作业旁站监督和隐患闭环整改来强化安全管理。全年开展安全专项检查42次，排查治理隐患156项，所有较大及以上风险作业均完成到岗到位监督。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 18,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十八节 高风险作业控制"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "针对深基坑、高支模、起重吊装、跨越施工和临近带电体作业，项目部逐项编制专项施工方案并组织专家论证。施工前完成作业人员资格核验、工器具检查和应急物资布置，施工过程中由监理和业主项目部联合旁站。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 19,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第十九节 环保水保总体安排"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "项目严格落实环评批复和水土保持方案要求，按照分区管控、源头减量、过程监督、完工恢复的原则组织施工。各标段设置环保水保责任人，按月报送扬尘、噪声、弃土弃渣和植被恢复情况。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 20,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十节 临时工程恢复"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "施工便道、牵张场、材料堆场和临时排水沟按照边施工边恢复原则管理。对已完成施工的区段，及时清理建筑垃圾、拆除临时设施、恢复表土和植被，减少对农田、林地和河道岸线的长期影响。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 21,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十一节 环保水保措施"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "工程环保水保措施包括施工便道控制、弃土弃渣规范处置、临时排水沉淀处理、植被恢复和噪声扬尘控制。现场裸土区域采取覆盖、洒水和围挡措施，泥浆水经沉淀后回用或达标排放，严禁直接排入周边水体。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 22,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十二节 生态保护与监测"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "对穿越林地、湿地和水网密集区的施工段，项目部实施生态敏感点清单管理。施工期间开展噪声、扬尘、地表水和水土流失监测，发现超标风险时立即调整施工组织并采取补救措施。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 23,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十三节 信息化与数字化管控"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "项目采用数字化项目管理平台记录施工进度、质量验收、安全检查和物资到货情况。关键节点通过移动端拍照留痕，隐患整改实行派单、反馈、复核、销号闭环，形成可追溯的工程管理数据链。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 24,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十四节 参建单位履约评价"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "建设管理单位按季度组织设计、监理、施工和物资供应单位履约评价。评价内容包括资源投入、计划执行、质量安全、问题整改和协同配合，对履约偏差较大的单位采取约谈、限期整改和考核扣分。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 25,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十五节 当前风险概述"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "进入收尾和调试阶段后，项目风险由土建施工为主逐步转向设备供货、系统调试、跨专业协同和停电窗口安排。建设管理单位已建立风险清单，按红、橙、黄、蓝四级进行动态跟踪。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 26,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十六节 主要风险与应对措施"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "华东电网500kV输变电工程当前主要风险包括复杂地形施工进度压力、设备供货节点不确定性、跨越施工协调难度和极端天气影响。项目部通过滚动计划、驻厂催交、专项协调和应急预案演练降低风险影响。"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_idx": 27,
+      "page_size": [595, 841],
+      "para_blocks": [
+        {
+          "type": "title",
+          "index": 0,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "content": "第二十七节 风险跟踪表"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "index": 1,
+          "lines": [
+            {
+              "spans": [
+                {"type": "text", "html": "<table><tr><th>风险事项</th><th>影响</th><th>应对措施</th></tr><tr><td>设备供货延期</td><td>影响安装和调试</td><td>驻厂催交、替代运输方案</td></tr><tr><td>跨越审批滞后</td><td>影响线路贯通</td><td>提前报审、属地专班协调</td></tr><tr><td>极端天气</td><td>影响高空作业</td><td>优化施工窗口、完善应急预案</td></tr><tr><td>调试缺陷集中</td><td>影响投产节点</td><td>分阶段消缺、厂家现场支持</td></tr></table>"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
