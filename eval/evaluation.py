@@ -2,7 +2,7 @@
 RAG 评估模块。
 
 提供离线批量评估与单条实时评估两种能力：
-1. RAGEvaluator：在评测集上批量执行 RAG，计算 page_precision@k 与 ragas 标准指标
+1. RAGEvaluator：在评测集上批量执行 RAG，计算 page_recall@k 与 ragas 标准指标
 2. SingleTurnEvaluator：对单次 RAG 调用进行轻量打分，可用于线上监控
 
 用法：
@@ -11,12 +11,14 @@ RAG 评估模块。
     dataset = EvalDataset.from_json(Path("eval/eval_dataset.json"))
     evaluator = RAGEvaluator()
     df = evaluator.run_batch(dataset, top_k=6)
-    print(df[["question", "page_precision@k", "faithfulness"]])
+    print(df[["question", "page_recall@k", "faithfulness"]])
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
@@ -37,7 +39,9 @@ from ragas.metrics.collections import (
 
 from src.config import settings
 from src.generage_graph import build_llm
-from src.rag_app import RAGApp
+
+if TYPE_CHECKING:
+    from src.rag_app import RAGApp
 
 
 # ---------------------------------------------------------------------------
@@ -85,15 +89,15 @@ class EvalDataset:
 # 自定义检索指标
 # ---------------------------------------------------------------------------
 
-def compute_page_precision_at_k(
+def compute_page_recall_at_k(
     documents: List[Document],
     expected_pages: List[int],
     top_k: int = 6,
 ) -> Optional[float]:
-    """计算页面精确率 Page Precision@K。
+    """计算页面召回率 Page Recall@K。
 
-    取前 top_k 个检索结果，统计其中页面号命中预期页面集合的比例。
-    不足 top_k 个结果时，空缺位置视为未命中，分母固定为 top_k。
+    取前 top_k 个检索结果，统计其中命中的唯一页面号占预期页面集合的比例。
+    同一页面在结果中多次出现只计一次命中。
 
     参数：
         documents: 检索到的文档列表
@@ -109,14 +113,13 @@ def compute_page_precision_at_k(
         return 0.0
 
     expected_set = set(expected_pages)
-    hits = 0
-    for i in range(top_k):
-        if i < len(documents):
-            page = documents[i].metadata.get("page")
-            if page is not None and page in expected_set:
-                hits += 1
+    hit_pages: set = set()
+    for i in range(min(top_k, len(documents))):
+        page = documents[i].metadata.get("page")
+        if page is not None and page in expected_set:
+            hit_pages.add(page)
 
-    return hits / top_k
+    return len(hit_pages) / len(expected_set)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +140,12 @@ class RAGEvaluator:
             rag_app: 注入的 RAG 应用实例；为 None 时使用默认 RAGApp()
             evaluator_llm: 传给 ragas 的评估 LLM；为 None 时通过 build_llm(temperature=0) 构造
         """
-        self.rag_app = rag_app if rag_app is not None else RAGApp()
+        if rag_app is not None:
+            self.rag_app = rag_app
+        else:
+            from src.rag_app import RAGApp
+
+            self.rag_app = RAGApp()
         self.evaluator_llm = evaluator_llm if evaluator_llm is not None else build_llm(temperature=0)
 
     def run_batch(self, dataset: EvalDataset, top_k: int = 6) -> pd.DataFrame:
@@ -145,7 +153,7 @@ class RAGEvaluator:
 
         参数：
             dataset: 评估集
-            top_k: 页面精确率的评估截止位置
+            top_k: 页面召回率的评估截止位置
 
         返回：
             包含所有评估指标的 DataFrame
@@ -160,9 +168,9 @@ class RAGEvaluator:
         # 1. 执行 RAG
         for idx, sample in enumerate(samples):
             question = sample.get("question", "")
-            company_name = sample.get("company_name", "")
+            company_code = sample.get("company_code", "")
             try:
-                result = self.rag_app.run(question, company_name)
+                result = self.rag_app.run(question, company_code)
                 rag_results.append(result)
             except Exception as exc:
                 print(f"[警告] 样本评估失败: question={question}, error={exc}")
@@ -175,13 +183,13 @@ class RAGEvaluator:
                     }
                 )
 
-        # 2. 计算 page_precision@k
-        page_precisions: List[Optional[float]] = []
+        # 2. 计算 page_recall@k
+        page_recalls: List[Optional[float]] = []
         for sample, result in zip(samples, rag_results):
             docs = result.get("documents", [])
             expected_pages = sample.get("expected_source_pages", [])
-            pp = compute_page_precision_at_k(docs, expected_pages, top_k)
-            page_precisions.append(pp)
+            pr = compute_page_recall_at_k(docs, expected_pages, top_k)
+            page_recalls.append(pr)
 
         # 3. 构建 ragas 数据集
         ragas_samples = []
@@ -225,7 +233,7 @@ class RAGEvaluator:
                 "expected_source_pages": [
                     s.get("expected_source_pages", []) for s in samples
                 ],
-                "page_precision@k": page_precisions,
+                "page_recall@k": page_recalls,
             }
         )
 
@@ -278,59 +286,72 @@ class SingleTurnEvaluator:
             question: 用户查询
             generation: RAG 生成的答案
             documents: 检索到的文档列表
-            expected_answer: 预期回答
-            expected_pages: 预期页面号列表
-            top_k: 页面精确率的评估截止位置
+            expected_answer: 预期回答；为空时不计算 `context_recall` 和
+                `answer_correctness`
+            expected_pages: 预期页面号列表；为 `None` 或空列表时不计算
+                `page_recall@k`
+            top_k: 页面召回率的评估截止位置
 
         返回：
-            包含各指标的字典，键包括 page_precision@k、context_precision、
-            context_recall、faithfulness、answer_relevancy、answer_correctness
+            包含各指标的字典，键包括 page_recall@k、context_precision、
+            context_recall、faithfulness、answer_relevancy、answer_correctness。
+            当 `expected_answer` 为空时，`context_recall` 和
+            `answer_correctness` 固定为 `None`。
 
         异常：
             RuntimeError: ragas 评估失败时抛出
         """
         expected_pages = expected_pages or []
-        page_precision = compute_page_precision_at_k(documents, expected_pages, top_k)
+        page_recall = compute_page_recall_at_k(documents, expected_pages, top_k)
 
-        dataset = EvaluationDataset.from_list(
-            [
-                {
-                    "user_input": question,
-                    "response": generation,
-                    "retrieved_contexts": [d.page_content for d in documents],
-                    "reference": expected_answer,
-                }
-            ]
-        )
+        has_reference = bool(expected_answer and expected_answer.strip())
+        sample: dict = {
+            "user_input": question,
+            "response": generation,
+            "retrieved_contexts": [d.page_content for d in documents],
+        }
+        if has_reference:
+            sample["reference"] = expected_answer
+
+        dataset = EvaluationDataset.from_list([sample])
+
+        metrics = [
+            context_precision,
+            faithfulness,
+            answer_relevancy,
+        ]
+        if has_reference:
+            metrics.extend([context_recall, answer_correctness])
 
         try:
             ragas_result = evaluate(
                 dataset,
-                metrics=[
-                    context_precision,
-                    context_recall,
-                    faithfulness,
-                    answer_relevancy,
-                    answer_correctness,
-                ],
+                metrics=metrics,
                 llm=self.evaluator_llm,
             )
             ragas_df = ragas_result.to_pandas()
         except Exception as exc:
             raise RuntimeError(f"ragas 评估失败: {exc}") from exc
 
-        result = {
-            "page_precision@k": page_precision,
+        result: dict = {
+            "page_recall@k": page_recall,
         }
         for col in [
             "context_precision",
-            "context_recall",
             "faithfulness",
             "answer_relevancy",
-            "answer_correctness",
         ]:
             result[col] = (
                 ragas_df[col].iloc[0] if col in ragas_df.columns else None
             )
+
+        if has_reference:
+            for col in ["context_recall", "answer_correctness"]:
+                result[col] = (
+                    ragas_df[col].iloc[0] if col in ragas_df.columns else None
+                )
+        else:
+            result["context_recall"] = None
+            result["answer_correctness"] = None
 
         return result

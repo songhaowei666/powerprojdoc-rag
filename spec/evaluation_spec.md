@@ -6,7 +6,7 @@
 
 ## 1. 概述
 
-`eval/evaluation.py` 是 RAG 系统的评估模块，所有评估代码统一放在 `eval/` 目录下。该模块提供**离线批量评估**与**单条实时评估**两种能力。模块基于 ragas 框架计算标准 RAG 指标，同时自定义「页面精确率」以适配本项目「按页面检索」的场景。
+`eval/evaluation.py` 是 RAG 系统的评估模块，所有评估代码统一放在 `eval/` 目录下。该模块提供**离线批量评估**与**单条实时评估**两种能力。模块基于 ragas 框架计算标准 RAG 指标，同时自定义「页面召回率」以适配本项目「按页面检索」的场景。
 
 评估不引入 trulens，全部指标由 ragas + 自定义逻辑覆盖；单条实时评估接口可直接嵌入生产链路做轻量监控。
 
@@ -17,7 +17,7 @@
 | 目标 | 说明 |
 |------|------|
 | 分层评估 | 检索、响应、整体三层评估，职责分离 |
-| 页面级粒度 | 自定义 `page_precision@k`，精确到年报页码 |
+| 页面级粒度 | 自定义 `page_recall@k`，精确到年报页码 |
 | 离线 + 实时 | `RAGEvaluator` 跑批量评测集；`SingleTurnEvaluator` 做单条实时打分 |
 | 统一 LLM 配置 | 评估器 LLM 走项目 `config.py`，与生成阶段保持一致 |
 | 失败不中断 | 批量评估时单条失败记为 NaN，不阻断整批 |
@@ -71,7 +71,7 @@ langchain-openai
     "expected_answer": "2024年营业收入为577.96亿元。",
     "expected_source_doc": "中芯国际2024年年度报告",
     "expected_source_pages": [12, 13],
-    "company_name": "中芯国际集成电路制造有限公司"
+    "company_code": "001"
   }
 ]
 ```
@@ -81,24 +81,25 @@ langchain-openai
 | `question` | `str` | 是 | 用户查询 |
 | `expected_answer` | `str` | 是 | 预期回答，用于 answer_correctness 与 context_recall |
 | `expected_source_doc` | `str` | 是 | 预期来源文档名，供人工核对 |
-| `expected_source_pages` | `List[int]` | 是 | 预期来源页面号列表；为空列表时 page_precision@k 不参与计算 |
-| `company_name` | `str` | 是 | 目标公司名称，传递给检索器做文档隔离 |
+| `expected_source_pages` | `List[int]` | 是 | 预期来源页面号列表；为空列表时 page_recall@k 不参与计算 |
+| `company_code` | `str` | 是 | 目标公司代码，传递给检索器做文档隔离 |
 
 ---
 
 ## 6. 指标定义
 
-### 6.1 页面精确率 `page_precision@k`
+### 6.1 页面召回率 `page_recall@k`
 
 **公式**：
 
 ```
-page_precision@k = |{i | page_i ∈ expected_pages, i ∈ [1, k]}| / k
+page_recall@k = |{page | page ∈ expected_pages, page 出现在前 k 个结果的 metadata.page 中}| / |expected_pages|
 ```
 
-- 取前 `k` 个检索结果（不足 `k` 个时，空缺位置视为未命中）
+- 取前 `k` 个检索结果
 - 对每个结果读取 `doc.metadata.get("page")`，若该页面号在 `expected_source_pages` 中则计为命中
-- 分母固定为 `k`，保证不同样本间可比
+- 同一页面多次出现只计一次命中
+- 分母为预期页面集合大小 `|expected_pages|`
 
 **边界行为**：
 - `expected_source_pages` 为空列表 → 返回 `None`（无法评估）
@@ -142,10 +143,10 @@ class EvalDataset:
 
 ---
 
-### 7.2 compute_page_precision_at_k
+### 7.2 compute_page_recall_at_k
 
 ```python
-def compute_page_precision_at_k(
+def compute_page_recall_at_k(
     documents: List[Document],
     expected_pages: List[int],
     top_k: int = 6,
@@ -186,11 +187,11 @@ class RAGEvaluator:
 
 **`run_batch` 执行流程**：
 
-1. **RAG 执行**：遍历 `dataset`，对每个样本调用 `rag_app.run(question, company_name)`
+1. **RAG 执行**：遍历 `dataset`，对每个样本调用 `rag_app.run(question, company_code)`
    - 成功：收集 `question`、`generation`、`documents`
    - 失败：打印警告，该样本的 generation 与 documents 记为空
 
-2. **页面精确率计算**：对每个样本调用 `compute_page_precision_at_k`
+2. **页面召回率计算**：对每个样本调用 `compute_page_recall_at_k`
 
 3. **ragas 批量评估**：
    - 构建 `EvaluationDataset`，字段映射如下：
@@ -200,11 +201,11 @@ class RAGEvaluator:
      - `reference` → `expected_answer`
    - 调用 `ragas.evaluate(dataset, metrics=[...], llm=evaluator_llm)`
 
-4. **结果合并**：将 ragas 结果（`Result.to_pandas()`）与 `page_precision@k` 按行合并
+4. **结果合并**：将 ragas 结果（`Result.to_pandas()`）与 `page_recall@k` 按行合并
 
 5. **输出 DataFrame**：列名包含
    - `question`, `expected_answer`, `generation`, `expected_source_pages`
-   - `page_precision@k`
+   - `page_recall@k`
    - `context_precision`, `context_recall`, `faithfulness`, `answer_relevancy`, `answer_correctness`
 
 **边界行为**：
@@ -238,15 +239,15 @@ class SingleTurnEvaluator:
 | `question` | 用户查询 |
 | `generation` | RAG 生成的答案 |
 | `documents` | 检索到的文档列表 |
-| `expected_answer` | 预期回答；为空时不计算 `answer_correctness` |
-| `expected_pages` | 预期页面号列表；为 `None` 或空列表时不计算 `page_precision@k` |
-| `top_k` | 页面精确率的评估截止位置 |
+| `expected_answer` | 预期回答；为空时不计算 `context_recall` 和 `answer_correctness` |
+| `expected_pages` | 预期页面号列表；为 `None` 或空列表时不计算 `page_recall@k` |
+| `top_k` | 页面召回率的评估截止位置 |
 
 **返回结构**：
 
 ```python
 {
-    "page_precision@k": float | None,
+    "page_recall@k": float | None,
     "context_precision": float | None,
     "context_recall": float | None,
     "faithfulness": float | None,
@@ -255,8 +256,19 @@ class SingleTurnEvaluator:
 }
 ```
 
+**指标计算规则**：
+
+| 指标 | 是否需要 `expected_answer` | 说明 |
+|------|---------------------------|------|
+| `page_recall@k` | 否 | 依赖 `expected_pages`；为空时返回 `None` |
+| `context_precision` | 否 | 判断检索上下文与问题的相关性 |
+| `faithfulness` | 否 | 判断答案是否基于检索上下文 |
+| `answer_relevancy` | 否 | 判断答案与问题的相关程度 |
+| `context_recall` | **是** | 需要 `reference` 拆解 claim，为空时返回 `None` |
+| `answer_correctness` | **是** | 需要与 `reference` 对比语义，为空时返回 `None` |
+
 **边界行为**：
-- `expected_answer` 为空字符串时，仍调用 ragas，但 `answer_correctness` 和 `context_recall` 可能为 `NaN`
+- `expected_answer` 为空字符串时，调用 ragas 时不传入 `reference`，且不请求 `context_recall` 和 `answer_correctness`，这两个指标固定返回 `None`
 - ragas 单条评估失败时，抛出 `RuntimeError`
 
 ---
@@ -273,8 +285,8 @@ dataset = EvalDataset.from_json(Path("eval/eval_dataset.json"))
 evaluator = RAGEvaluator()
 
 df = evaluator.run_batch(dataset, top_k=6)
-print(df[["question", "page_precision@k", "faithfulness", "answer_correctness"]])
-print(f"平均页面精确率: {df['page_precision@k'].mean()}")
+print(df[["question", "page_recall@k", "faithfulness", "answer_correctness"]])
+print(f"平均页面召回率: {df['page_recall@k'].mean()}")
 ```
 
 ### 8.2 单条实时评估
@@ -313,5 +325,6 @@ print(result)
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v1.2 | 2026-06-14 | 将自定义页面指标从 `page_precision@k` 改为 `page_recall@k`，公式从 `hits / k` 调整为 `unique hits / |expected_pages|` |
 | v1.1 | 2026-06-12 | 将评估模块从 `src/evaluation.py` 迁移到 `eval/evaluation.py`，评估代码统一放入 `eval/` 目录 |
 | v1.0 | 2026-06-11 | 初始版本；定义评估集 schema、page_precision@k、ragas 五指标、批量/单条两种评估器 |

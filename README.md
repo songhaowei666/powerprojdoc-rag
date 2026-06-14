@@ -181,7 +181,7 @@ print(result["generation"])
 
 ### 11. 系统评估（Evaluation）
 
-基于 **ragas** 框架的离线批量评估与单条实时评估，覆盖检索精确率、忠实度、答案相关性等指标，并自定义页面级 `page_precision@k`。
+基于 **ragas** 框架的离线批量评估与单条实时评估，覆盖检索召回率、忠实度、答案相关性等指标，并自定义页面级 `page_recall@k`。
 
 > 相关代码：`eval/evaluation.py`  
 > 规格文档：`spec/evaluation_spec.md`
@@ -340,7 +340,7 @@ for r in results:
 
 ### 系统评估（Evaluator）
 
-- 基于 ragas 构建自动化评测体系：检索侧关注页面精确率与上下文精确度；生成侧关注忠实度与答案相关性。
+- 基于 ragas 构建自动化评测体系：检索侧关注页面召回率与上下文精确度；生成侧关注忠实度与答案相关性。
 - 提供 `RAGEvaluator`（批量离线）与 `SingleTurnEvaluator`（单条实时）两种评估入口。
 
 ---

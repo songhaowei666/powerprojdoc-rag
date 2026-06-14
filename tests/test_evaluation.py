@@ -21,7 +21,7 @@ from eval.evaluation import (
     EvalDataset,
     RAGEvaluator,
     SingleTurnEvaluator,
-    compute_page_precision_at_k,
+    compute_page_recall_at_k,
 )
 
 
@@ -38,14 +38,14 @@ def sample_eval_json(tmp_path):
             "expected_answer": "A1",
             "expected_source_doc": "doc1",
             "expected_source_pages": [1, 2],
-            "company_name": "示例科技",
+            "company_code": "000001",
         },
         {
             "question": "Q2",
             "expected_answer": "A2",
             "expected_source_doc": "doc2",
             "expected_source_pages": [5],
-            "company_name": "示例科技",
+            "company_code": "000001",
         },
     ]
     path = tmp_path / "eval.json"
@@ -107,15 +107,15 @@ class TestEvalDataset:
 # compute_page_precision_at_k Tests
 # ---------------------------------------------------------------------------
 
-class TestComputePagePrecisionAtK:
-    """Tests for compute_page_precision_at_k."""
+class TestComputePageRecallAtK:
+    """Tests for compute_page_recall_at_k."""
 
     def test_full_hit(self):
         docs = [
             Document(page_content="p1", metadata={"page": 1}),
             Document(page_content="p2", metadata={"page": 2}),
         ]
-        score = compute_page_precision_at_k(docs, [1, 2], top_k=2)
+        score = compute_page_recall_at_k(docs, [1, 2], top_k=2)
         assert score == 1.0
 
     def test_partial_hit(self):
@@ -123,23 +123,23 @@ class TestComputePagePrecisionAtK:
             Document(page_content="p1", metadata={"page": 1}),
             Document(page_content="p3", metadata={"page": 3}),
         ]
-        score = compute_page_precision_at_k(docs, [1, 2], top_k=2)
+        score = compute_page_recall_at_k(docs, [1, 2], top_k=2)
         assert score == 0.5
 
     def test_no_hit(self):
         docs = [
             Document(page_content="p3", metadata={"page": 3}),
         ]
-        score = compute_page_precision_at_k(docs, [1, 2], top_k=2)
+        score = compute_page_recall_at_k(docs, [1, 2], top_k=2)
         assert score == 0.0
 
     def test_empty_expected_pages_returns_none(self):
         docs = [Document(page_content="p1", metadata={"page": 1})]
-        score = compute_page_precision_at_k(docs, [], top_k=2)
+        score = compute_page_recall_at_k(docs, [], top_k=2)
         assert score is None
 
     def test_empty_documents(self):
-        score = compute_page_precision_at_k([], [1], top_k=2)
+        score = compute_page_recall_at_k([], [1], top_k=2)
         assert score == 0.0
 
     def test_missing_page_key(self):
@@ -147,21 +147,30 @@ class TestComputePagePrecisionAtK:
             Document(page_content="p1", metadata={}),
             Document(page_content="p2", metadata={"page": 2}),
         ]
-        score = compute_page_precision_at_k(docs, [2], top_k=2)
-        assert score == 0.5
+        score = compute_page_recall_at_k(docs, [2], top_k=2)
+        assert score == 1.0
 
     def test_top_k_larger_than_docs(self):
         docs = [
             Document(page_content="p1", metadata={"page": 1}),
         ]
-        score = compute_page_precision_at_k(docs, [1, 2], top_k=3)
-        # 1 hit out of 3 positions
-        assert score == pytest.approx(1 / 3)
+        score = compute_page_recall_at_k(docs, [1, 2], top_k=3)
+        # 1 unique hit out of 2 expected pages
+        assert score == pytest.approx(0.5)
 
     def test_top_k_zero(self):
         docs = [Document(page_content="p1", metadata={"page": 1})]
-        score = compute_page_precision_at_k(docs, [1], top_k=0)
+        score = compute_page_recall_at_k(docs, [1], top_k=0)
         assert score == 0.0
+
+    def test_duplicate_pages_count_once(self):
+        docs = [
+            Document(page_content="p1", metadata={"page": 1}),
+            Document(page_content="p1_again", metadata={"page": 1}),
+        ]
+        score = compute_page_recall_at_k(docs, [1, 2], top_k=2)
+        # 1 unique hit out of 2 expected pages
+        assert score == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +195,7 @@ class TestSingleTurnEvaluator:
             top_k=2,
         )
 
-        assert result["page_precision@k"] == 0.5
+        assert result["page_recall@k"] == 1.0
         assert result["context_precision"] == 0.8
         assert result["context_recall"] == 0.7
         assert result["faithfulness"] == 0.9
@@ -204,7 +213,31 @@ class TestSingleTurnEvaluator:
             documents=[Document(page_content="ctx")],
         )
 
-        assert result["page_precision@k"] is None
+        assert result["page_recall@k"] is None
+        assert result["context_precision"] == 0.8
+        assert result["faithfulness"] == 0.9
+        assert result["answer_relevancy"] == 0.85
+        assert result["context_recall"] is None
+        assert result["answer_correctness"] is None
+
+    @patch("eval.evaluation.evaluate")
+    def test_evaluate_no_reference_skips_recall_metrics(self, mock_evaluate, mock_ragas_result, mock_llm):
+        mock_evaluate.return_value = mock_ragas_result
+
+        evaluator = SingleTurnEvaluator(evaluator_llm=mock_llm)
+        evaluator.evaluate(
+            question="Q",
+            generation="A",
+            documents=[Document(page_content="ctx")],
+        )
+
+        called_metrics = mock_evaluate.call_args.kwargs["metrics"]
+        metric_names = [m.__name__ for m in called_metrics]
+        assert not any("context_recall" in n for n in metric_names)
+        assert not any("answer_correctness" in n for n in metric_names)
+        assert any("context_precision" in n for n in metric_names)
+        assert any("faithfulness" in n for n in metric_names)
+        assert any("answer_relevancy" in n for n in metric_names)
 
     @patch("eval.evaluation.evaluate")
     def test_evaluate_ragas_failure(self, mock_evaluate, mock_llm):
@@ -256,14 +289,14 @@ class TestRAGEvaluator:
 
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 2
-        assert "page_precision@k" in df.columns
+        assert "page_recall@k" in df.columns
         assert "faithfulness" in df.columns
-        # Sample 0: pages [1,3] vs expected [1,2] -> 1 hit / 2 = 0.5
-        assert df.loc[0, "page_precision@k"] == 0.5
-        # Sample 1: pages [5] vs expected [5] -> 1 hit / 2 = 0.5 (top_k=2, only 1 doc)
-        assert df.loc[1, "page_precision@k"] == 0.5
-        mock_rag_app.run.assert_any_call("Q1", "示例科技")
-        mock_rag_app.run.assert_any_call("Q2", "示例科技")
+        # Sample 0: pages [1,3] vs expected [1,2] -> 1 unique hit / 2 expected = 0.5
+        assert df.loc[0, "page_recall@k"] == 0.5
+        # Sample 1: pages [5] vs expected [5] -> 1 unique hit / 1 expected = 1.0
+        assert df.loc[1, "page_recall@k"] == 1.0
+        mock_rag_app.run.assert_any_call("Q1", "000001")
+        mock_rag_app.run.assert_any_call("Q2", "000001")
 
     @patch("eval.evaluation.evaluate")
     def test_run_batch_rag_failure_continues(self, mock_evaluate, mock_ragas_result, mock_llm, sample_eval_json):
@@ -285,10 +318,10 @@ class TestRAGEvaluator:
 
         assert len(df) == 2
         # First sample failed: empty docs -> 0.0
-        assert df.loc[0, "page_precision@k"] == 0.0
+        assert df.loc[0, "page_recall@k"] == 0.0
         assert pd.isna(df.loc[0, "faithfulness"])
         # Second sample succeeded
-        assert df.loc[1, "page_precision@k"] == 0.5
+        assert df.loc[1, "page_recall@k"] == 1.0
         assert df.loc[1, "faithfulness"] == 0.85
 
     @patch("eval.evaluation.evaluate")
