@@ -273,9 +273,9 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parent.parent
     json_path = (
         root
-        / "data/stock_data/debug_data/MinerU_【财报】中芯国际：中芯国际2024年年度报告__20260520083937.json"
+        / "data/projdoc_data/debug_data/MinerU_【财报】中芯国际：中芯国际2024年年度报告__20260520083937.json"
     )
-    output_dir = root / "data/stock_data/debug_data/02_merged_reports"
+    output_dir = root / "data/projdoc_data/debug_data/02_merged_reports"
 
     merger = MinerUReportMerger()
     reports = merger.process_reports(

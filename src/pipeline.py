@@ -308,7 +308,7 @@ class Pipeline:
 
 if __name__ == "__main__":
     # 设置数据集根目录（此处以 test_set 为例）
-    root_path = here() / "data" / "stock_data"
+    root_path = here() / "data" / "projdoc_data"
     print('root_path:', root_path)
     #print(type(root_path))
     # 初始化主流程

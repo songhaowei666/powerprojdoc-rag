@@ -211,9 +211,9 @@ DASHSCOPE_API_KEY=...
 GEMINI_API_KEY=...
 
 # 数据目录（留空使用默认值）
-CHROMA_PERSIST_DIR=data/stock_data/databases/vector_dbs
-BM25_OUTPUT_DIR=data/stock_data/databases/bm25_dbs
-REPORTS_INPUT_DIR=data/stock_data/databases/chunked_reports
+CHROMA_PERSIST_DIR=data/projdoc_data/databases/vector_dbs
+BM25_OUTPUT_DIR=data/projdoc_data/databases/bm25_dbs
+REPORTS_INPUT_DIR=data/projdoc_data/databases/chunked_reports
 ```
 
 3. 安装依赖（请根据项目实际环境安装）。
@@ -254,13 +254,13 @@ from pyprojroot import here
 from src.pipeline import Pipeline, PipelineConfig
 
 # 初始化流水线
-pipeline = Pipeline(PipelineConfig.from_root(here() / "data" / "stock_data"))
+pipeline = Pipeline(PipelineConfig.from_root(here() / "data" / "projdoc_data"))
 
 # 步骤1：PDF -> Markdown（按需执行）
 # pipeline.export_reports_to_markdown("report.pdf")
 
 # 步骤2：MinerU JSON -> 标准报告结构
-# pipeline.merge_mineru_reports(reports_dir=here() / "data" / "stock_data" / "debug_data")
+# pipeline.merge_mineru_reports(reports_dir=here() / "data" / "projdoc_data" / "debug_data")
 
 # 步骤3：文本分块
 pipeline.chunk_reports()        # Markdown 分块
@@ -289,7 +289,7 @@ for r in results:
 ```
 .
 ├── data/                           # 数据目录
-│   └── stock_data/
+│   └── projdoc_data/
 │       ├── debug_data/             # 调试中间产物（解析结果、合并报告、Markdown）
 │       └── databases/              # 向量库、分块报告、BM25 索引
 ├── spec/                           # 规格文档（与 src/ 代码同步维护）

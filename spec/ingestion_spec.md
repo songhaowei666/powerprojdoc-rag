@@ -36,9 +36,9 @@ pydantic-settings
 | `OPENAI_API_KEY` | VectorDBIngestor 调用 OpenAI Embedding | 通过 `src.config.settings` 读取 |
 | `OPENAI_API_BASE` | OpenAI 自定义 Base URL（可选） | 通过 `src.config.settings` 读取 |
 | `EMBEDDING_MODEL` | 默认 Embedding 模型 | 通过 `src.config.settings` 读取，默认 `text-embedding-3-large` |
-| `CHROMA_PERSIST_DIR` | ChromaDB 持久化目录 | 通过 `src.config.settings` 读取，默认 `data/stock_data/databases/vector_dbs` |
-| `BM25_OUTPUT_DIR` | BM25 索引输出目录 | 通过 `src.config.settings` 读取，默认 `data/stock_data/databases/bm25_index` |
-| `REPORTS_INPUT_DIR` | 报告 JSON 输入目录 | 通过 `src.config.settings` 读取，默认 `data/stock_data/databases/chunked_reports` |
+| `CHROMA_PERSIST_DIR` | ChromaDB 持久化目录 | 通过 `src.config.settings` 读取，默认 `data/projdoc_data/databases/vector_dbs` |
+| `BM25_OUTPUT_DIR` | BM25 索引输出目录 | 通过 `src.config.settings` 读取，默认 `data/projdoc_data/databases/bm25_index` |
+| `REPORTS_INPUT_DIR` | 报告 JSON 输入目录 | 通过 `src.config.settings` 读取，默认 `data/projdoc_data/databases/chunked_reports` |
 
 > 注意：`VectorDBIngestor` 的 embedding 实现已改为 OpenAI，不再使用 DashScope。
 
@@ -108,8 +108,8 @@ class BM25Ingestor:
 
 批量处理目录下所有 `*.json` 报告：
 
-1. `all_reports_dir` 为空时，自动取 `settings.reports_input_dir`（`.env` 中的 `REPORTS_INPUT_DIR`，默认 `data/stock_data/databases/chunked_reports`）
-2. `output_dir` 为空时，自动取 `settings.bm25_output_dir`（`.env` 中的 `BM25_OUTPUT_DIR`，默认 `data/stock_data/databases/bm25_index`）
+1. `all_reports_dir` 为空时，自动取 `settings.reports_input_dir`（`.env` 中的 `REPORTS_INPUT_DIR`，默认 `data/projdoc_data/databases/chunked_reports`）
+2. `output_dir` 为空时，自动取 `settings.bm25_output_dir`（`.env` 中的 `BM25_OUTPUT_DIR`，默认 `data/projdoc_data/databases/bm25_index`）
 3. `output_dir.mkdir(parents=True, exist_ok=True)` — 自动创建输出目录
 4. 遍历 `all_reports_dir.glob("*.json")`，带 tqdm 进度条
 5. 逐报告读取 JSON，提取 `metainfo` 与 `content.chunks`
@@ -234,8 +234,8 @@ def _get_embeddings(self, text)
 
 批量处理目录下所有 `*.json` 报告：
 
-1. `all_reports_dir` 为空时，自动取 `settings.reports_input_dir`（`.env` 中的 `REPORTS_INPUT_DIR`，默认 `data/stock_data/databases/chunked_reports`）
-2. `output_dir` 为空时，自动取 `settings.chroma_persist_dir`（`.env` 中的 `CHROMA_PERSIST_DIR`，默认 `data/stock_data/databases/vector_dbs`）
+1. `all_reports_dir` 为空时，自动取 `settings.reports_input_dir`（`.env` 中的 `REPORTS_INPUT_DIR`，默认 `data/projdoc_data/databases/chunked_reports`）
+2. `output_dir` 为空时，自动取 `settings.chroma_persist_dir`（`.env` 中的 `CHROMA_PERSIST_DIR`，默认 `data/projdoc_data/databases/vector_dbs`）
 3. `index_name` 为空时，默认值为 `"default"`，会传递给 `_build_docs` 写入 metadata
 4. `output_dir.mkdir(parents=True, exist_ok=True)`
 5. 遍历 `all_reports_dir.glob("*.json")`，带 tqdm 进度条

@@ -37,8 +37,8 @@ class GraphState(TypedDict):
 
 
 # 初始化混合检索器
-_vector_db_dir = Path(settings.chroma_persist_dir) if settings.chroma_persist_dir else Path("data/stock_data/databases/vector_dbs")
-_documents_dir = Path(settings.reports_input_dir) if settings.reports_input_dir else Path("data/stock_data/databases/chunked_reports")
+_vector_db_dir = Path(settings.chroma_persist_dir) if settings.chroma_persist_dir else Path("data/projdoc_data/databases/vector_dbs")
+_documents_dir = Path(settings.reports_input_dir) if settings.reports_input_dir else Path("data/projdoc_data/databases/chunked_reports")
 
 _hybrid_retriever = HybridRetriever(
     vector_db_dir=_vector_db_dir,

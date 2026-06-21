@@ -77,14 +77,38 @@ def upload_local_file(
 ### get_batch_result
 
 ```python
-def get_batch_result(batch_id: str, *, file_index: int = 0) -> None
+def get_batch_result(
+    batch_id: str,
+    *,
+    file_index: int = 0,
+    source_pdf_path: str | Path | None = None,
+    debug_data_dir: str | Path | None = None,
+    mineru_export_dir: str | Path | None = None,
+) -> dict[str, Path] | None
 ```
 
 - 轮询 `GET /api/v4/extract-results/batch/{batch_id}`，间隔 5 秒
 - 取 `extract_result[file_index]` 作为单文件结果
 - `state` 为 `waiting-file` / `pending` / `running` / `converting` 时继续等待
-- `state=done` 时下载 `full_zip_url` 到 `{batch_id}.zip` 并解压到 `{batch_id}/`
-- `state=failed` 或存在 `err_msg` 时打印错误并返回
+- `state=done` 时下载 `full_zip_url` 并解压
+- `state=failed` 或存在 `err_msg` 时打印错误并返回 `None`
+
+**未传 `source_pdf_path`（兼容旧行为）**：
+
+- zip 保存为 `{batch_id}.zip`，解压到 `{batch_id}/`（当前工作目录）
+- 返回 `{"zip_path", "extract_dir"}`
+
+**传入 `source_pdf_path`（本地上传推荐）**：
+
+| 产物 | 路径 |
+|------|------|
+| zip | `data/mineru_export/{文件名}_{时间戳}.zip` |
+| 解压目录 | `data/mineru_export/{文件名}_{时间戳}/` |
+| layout.json | `data/projdoc_data/debug_data/{文件名}.json`（原始 PDF 主名，无时间戳） |
+
+- 时间戳格式：`%Y%m%d%H%M%S`（如 `20250621143052`）
+- 解压目录内递归查找 `layout.json`，复制到 `debug_data`
+- 成功返回 `{"zip_path", "extract_dir", "layout_json_path"}`
 
 ---
 
@@ -93,10 +117,10 @@ def get_batch_result(batch_id: str, *, file_index: int = 0) -> None
 ### unzip_file
 
 ```python
-def unzip_file(zip_path: str, extract_dir: str | None = None) -> None
+def unzip_file(zip_path: str | Path, extract_dir: str | Path | None = None) -> Path
 ```
 
-解压 zip 到指定目录；`extract_dir` 默认为去掉 `.zip` 后缀的路径。
+解压 zip 到指定目录；`extract_dir` 默认为去掉 `.zip` 后缀的路径。返回解压目录路径。
 
 ---
 
@@ -108,8 +132,10 @@ def unzip_file(zip_path: str, extract_dir: str | None = None) -> None
 
 ```python
 batch_id = pdf_mineru.upload_local_file(str(pdf_path))
-pdf_mineru.get_batch_result(batch_id)
-# 解压目录为 {batch_id}/，其中 full.md 为 Markdown 结果
+paths = pdf_mineru.get_batch_result(batch_id, source_pdf_path=pdf_path)
+# paths["layout_json_path"] -> data/projdoc_data/debug_data/{文件名}.json
+# paths["extract_dir"]      -> data/mineru_export/{文件名}_{时间戳}/
+# paths["zip_path"]         -> data/mineru_export/{文件名}_{时间戳}.zip
 ```
 
 ---
@@ -118,4 +144,5 @@ pdf_mineru.get_batch_result(batch_id)
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.1 | 2026-06-21 | 本地上传结果归档：layout.json 复制到 debug_data，zip/解压目录保存到 mineru_export（文件名+时间戳） |
 | v1.0 | 2026-06-21 | 初版：URL 提交 + 本地上传双路径 |

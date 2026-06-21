@@ -211,8 +211,8 @@ if __name__ == "__main__":
     text_splitter = TextSplitter()
 
     # 默认路径与 PipelineConfig 保持一致
-    merged_reports_path = root / "data" / "stock_data" / "debug_data" / "02_merged_reports"
-    documents_dir = root / "data" / "stock_data" / "databases" / "chunked_reports"
+    merged_reports_path = root / "data" / "projdoc_data" / "debug_data" / "02_merged_reports"
+    documents_dir = root / "data" / "projdoc_data" / "databases" / "chunked_reports"
     serialized_tables_dir = None
 
     text_splitter.split_all_reports(

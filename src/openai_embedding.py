@@ -143,8 +143,8 @@ if __name__ == "__main__":
     # root = Path(__file__).resolve().parent.parent
 
     # # 默认路径与 PipelineConfig 保持一致
-    # input_dir = root / "data" / "stock_data" / "databases" / "chunked_reports"
-    # output_dir = root / "data" / "stock_data" / "databases" / "vector_dbs_openai"
+    # input_dir = root / "data" / "projdoc_data" / "databases" / "chunked_reports"
+    # output_dir = root / "data" / "projdoc_data" / "databases" / "vector_dbs_openai"
 
     # ingestor = OpenAIVectorDBIngestor()
     # ingestor.process_reports(input_dir, output_dir)

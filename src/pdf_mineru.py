@@ -6,8 +6,10 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
 import os
+import shutil
 import time
 import zipfile
+from datetime import datetime
 
 import requests
 
@@ -17,6 +19,8 @@ api_key = os.getenv("MINERU_API_KEY") or settings.mineru_api_key
 
 _BATCH_UPLOAD_URL = "https://mineru.net/api/v4/file-urls/batch"
 _POLL_INTERVAL_SEC = 5
+DEBUG_DATA_DIR = ROOT_DIR / "data/projdoc_data/debug_data"
+MINERU_EXPORT_DIR = ROOT_DIR / "data/mineru_export"
 
 
 def _auth_headers() -> dict[str, str]:
@@ -155,12 +159,77 @@ def upload_local_file(
     return batch_id
 
 
-def get_batch_result(batch_id: str, *, file_index: int = 0) -> None:
+def _build_export_stem(source_pdf_path: str | Path) -> str:
+    """生成 MinerU 导出目录/压缩包主名：原始文件名（无扩展名）+ 时间戳。"""
+    pdf_stem = Path(source_pdf_path).stem
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    return f"{pdf_stem}_{timestamp}"
+
+
+def _find_layout_json(extract_dir: Path) -> Path | None:
+    """在解压目录中查找 layout.json。"""
+    direct = extract_dir / "layout.json"
+    if direct.is_file():
+        return direct
+    matches = list(extract_dir.rglob("layout.json"))
+    if matches:
+        return matches[0]
+    return None
+
+
+def _copy_layout_to_debug_data(
+    extract_dir: Path,
+    source_pdf_path: str | Path,
+    debug_data_dir: Path,
+) -> Path:
+    """将 layout.json 以原始 PDF 文件名复制到 debug_data 目录。"""
+    layout_path = _find_layout_json(extract_dir)
+    if layout_path is None:
+        raise FileNotFoundError(f"解压目录中未找到 layout.json: {extract_dir}")
+
+    debug_data_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = debug_data_dir / f"{Path(source_pdf_path).stem}.json"
+    shutil.copy2(layout_path, dest_path)
+    print(f"layout.json 已复制到: {dest_path}")
+    return dest_path
+
+
+def _download_and_extract_zip(
+    full_zip_url: str,
+    zip_path: Path,
+    extract_dir: Path,
+) -> Path:
+    """下载 MinerU 结果 zip 并解压到指定目录。"""
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"开始下载: {full_zip_url}")
+    res = requests.get(full_zip_url, stream=True)
+    with open(zip_path, "wb") as f:
+        for chunk in res.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+    print(f"下载完成，已保存到: {zip_path}")
+    unzip_file(zip_path, extract_dir)
+    return extract_dir
+
+
+def get_batch_result(
+    batch_id: str,
+    *,
+    file_index: int = 0,
+    source_pdf_path: str | Path | None = None,
+    debug_data_dir: str | Path | None = None,
+    mineru_export_dir: str | Path | None = None,
+) -> dict[str, Path] | None:
     """
     轮询批量解析任务结果，完成后下载并解压 zip。
 
     :param batch_id: upload_local_file 返回的 batch_id
     :param file_index: extract_result 列表中的文件索引，单文件上传时为 0
+    :param source_pdf_path: 原始 PDF 路径；提供时将 layout.json 复制到 debug_data，
+        并将 zip/解压目录保存到 mineru_export（命名：文件名+时间戳）
+    :param debug_data_dir: layout.json 输出目录，默认 data/projdoc_data/debug_data
+    :param mineru_export_dir: zip 与解压目录输出根路径，默认 data/mineru_export
+    :return: 成功时返回路径字典，失败或未完成时返回 None
     """
     url = f"https://mineru.net/api/v4/extract-results/batch/{batch_id}"
 
@@ -190,40 +259,58 @@ def get_batch_result(batch_id: str, *, file_index: int = 0) -> None:
 
         if state == "failed" or err_msg:
             print(f"任务出错: {err_msg or state}")
-            return
+            return None
 
         if state == "done":
             full_zip_url = result.get("full_zip_url")
-            if full_zip_url:
-                local_filename = f"{batch_id}.zip"
-                print(f"开始下载: {full_zip_url}")
-                r = requests.get(full_zip_url, stream=True)
-                with open(local_filename, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                print(f"下载完成，已保存到: {local_filename}")
-                unzip_file(local_filename)
-            else:
+            if not full_zip_url:
                 print("未找到 full_zip_url，无法下载。")
-            return
+                return None
+
+            if source_pdf_path is not None:
+                export_stem = _build_export_stem(source_pdf_path)
+                export_root = Path(mineru_export_dir or MINERU_EXPORT_DIR)
+                zip_path = export_root / f"{export_stem}.zip"
+                extract_dir = export_root / export_stem
+                _download_and_extract_zip(full_zip_url, zip_path, extract_dir)
+                layout_path = _copy_layout_to_debug_data(
+                    extract_dir,
+                    source_pdf_path,
+                    Path(debug_data_dir or DEBUG_DATA_DIR),
+                )
+                return {
+                    "zip_path": zip_path,
+                    "extract_dir": extract_dir,
+                    "layout_json_path": layout_path,
+                }
+
+            zip_path = Path(f"{batch_id}.zip")
+            extract_dir = Path(batch_id)
+            _download_and_extract_zip(full_zip_url, zip_path, extract_dir)
+            return {"zip_path": zip_path, "extract_dir": extract_dir}
 
         print(f"未知状态: {state}")
-        return
+        return None
 
 
-# 解压zip文件的函数
-def unzip_file(zip_path, extract_dir=None):
+def unzip_file(zip_path: str | Path, extract_dir: str | Path | None = None) -> Path:
     """
-    解压指定的zip文件到目标文件夹。
-    :param zip_path: zip文件路径
-    :param extract_dir: 解压目标文件夹，默认为zip同名目录
+    解压指定的 zip 文件到目标文件夹。
+
+    :param zip_path: zip 文件路径
+    :param extract_dir: 解压目标文件夹，默认为去掉 .zip 后缀的路径
+    :return: 解压目录路径
     """
+    zip_path = Path(zip_path)
     if extract_dir is None:
-        extract_dir = zip_path.rstrip('.zip')
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        extract_dir = zip_path.with_suffix("")
+    else:
+        extract_dir = Path(extract_dir)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(extract_dir)
     print(f"已解压到: {extract_dir}")
+    return extract_dir
 
 if __name__ == "__main__":
     # 远程 URL 方式（PDF 需已在 OSS 上）
@@ -236,4 +323,8 @@ if __name__ == "__main__":
     local_pdf = "data/test_pdf/巴菲特1964年致合伙人的信年度.pdf"
     batch_id = upload_local_file(local_pdf)
     print("batch_id:", batch_id)
-    get_batch_result(batch_id)
+    paths = get_batch_result(batch_id, source_pdf_path=local_pdf)
+    if paths:
+        print(f"layout.json: {paths['layout_json_path']}")
+        print(f"zip: {paths['zip_path']}")
+        print(f"解压目录: {paths['extract_dir']}")

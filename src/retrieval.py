@@ -301,7 +301,7 @@ if __name__ == "__main__":
     ROOT = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(ROOT))
 
-    DB_ROOT = ROOT / "data" / "stock_data" / "databases"
+    DB_ROOT = ROOT / "data" / "projdoc_data" / "databases"
     REPORTS_DIR = DB_ROOT / "chunked_reports"
     BM25_DIR = DB_ROOT / "bm25_dbs"
     VECTOR_DIR = DB_ROOT / "vector_dbs"
