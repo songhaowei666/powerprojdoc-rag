@@ -19,7 +19,7 @@ pyprojroot
 ```
 
 **内部依赖**：
-- `src.pdf_mineru`：PDF 转 Markdown
+- `src.pdf_mineru`：PDF 转 Markdown（远程 URL 或本地上传，详见 `spec/pdf_mineru_spec.md`）
 - `src.parsed_reports_merging.PageTextPreparation`：页面文本规整
 - `src.markdown_reports_merging.MinerUReportMerger`：MinerU JSON 规整为标准报告结构
 - `src.text_splitter.TextSplitter`：报告分块
