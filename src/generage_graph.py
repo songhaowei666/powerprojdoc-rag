@@ -2,7 +2,8 @@
 基于 LangGraph 的自适应生成工作流（Self-RAG 生成侧）。
 
 职责：给定问题与检索到的文档列表，生成答案并对生成质量进行自检。
-若出现幻觉或答案未回答问题，则重写问题后重新生成，最多重试固定次数。
+若出现幻觉或答案未回答问题，则改写问题后在同文档内再生成一次；仍失败则输出
+`should_retry_retrieval` 供上游（如 rag_app）重新检索。
 
 输入：
     {
@@ -13,6 +14,8 @@
         "is_grounded_in_docs": False,
         "is_question_answered": False,
         "is_direct_generate": False,
+        "should_retry_retrieval": False,
+        "failure_reason": "skipped",
     }
 
 输出：
@@ -24,6 +27,8 @@
         "is_grounded_in_docs": bool,
         "is_question_answered": bool,
         "is_direct_generate": bool,
+        "should_retry_retrieval": bool,
+        "failure_reason": str,
     }
 
 注意：本模块不执行检索，文档列表由上游模块（如 retrieval_graph）提供。
@@ -64,6 +69,8 @@ class GraphState(TypedDict):
         is_grounded_in_docs: 最终生成是否基于检索文档（直接生成模式下未评估，恒为 False）
         is_question_answered: 最终生成是否回答了用户问题（直接生成模式下未评估，恒为 False）
         is_direct_generate: 是否跳过质量评估，直接基于文档生成并返回
+        should_retry_retrieval: 工作流结束时是否建议上游重新检索
+        failure_reason: ok | hallucination | not_answered | skipped
     """
 
     question: str
@@ -73,6 +80,8 @@ class GraphState(TypedDict):
     is_grounded_in_docs: bool
     is_question_answered: bool
     is_direct_generate: bool
+    should_retry_retrieval: bool
+    failure_reason: str
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +300,43 @@ def transform_query(state: GraphState) -> dict:
     return {"question": better_question}
 
 
+def finalize(state: GraphState) -> dict:
+    """
+    在工作流结束前统一写入重检索信号与失败原因。
+
+    参数：
+        state: 当前图状态
+
+    返回：
+        should_retry_retrieval、failure_reason
+    """
+    if state.get("is_direct_generate", False):
+        return {
+            "should_retry_retrieval": False,
+            "failure_reason": "skipped",
+        }
+
+    is_grounded = state.get("is_grounded_in_docs", False)
+    is_answered = state.get("is_question_answered", False)
+
+    if is_grounded and is_answered:
+        return {
+            "should_retry_retrieval": False,
+            "failure_reason": "ok",
+        }
+
+    if not is_grounded:
+        return {
+            "should_retry_retrieval": True,
+            "failure_reason": "hallucination",
+        }
+
+    return {
+        "should_retry_retrieval": True,
+        "failure_reason": "not_answered",
+    }
+
+
 # ---------------------------------------------------------------------------
 # 条件边函数
 # ---------------------------------------------------------------------------
@@ -336,22 +382,18 @@ def route_after_grade(state: GraphState) -> str:
         state: 当前图状态
 
     返回：
-        下一个节点的决策："useful" / "not useful" / "not supported"
+        下一个节点的决策："useful" / "not useful"
     """
     is_grounded = state["is_grounded_in_docs"]
     is_answered = state["is_question_answered"]
-    attempts = state.get("generation_attempts", 0)
 
     if is_grounded and is_answered:
         return "useful"
 
     if not is_grounded:
-        print("---决策：生成内容未基于文档，重试---")
-        if attempts >= 2:
-            return "not useful"
-        return "not supported"
-
-    print("---决策：生成内容未回答问题，改写查询---")
+        print("---决策：生成内容未基于文档，改写查询---")
+    else:
+        print("---决策：生成内容未回答问题，改写查询---")
     return "not useful"
 
 
@@ -382,8 +424,8 @@ def should_continue(state: GraphState) -> str:
         下一节点名称："generate" 或 "end"
     """
     attempts = state.get("generation_attempts", 0)
-    if attempts >= 3:
-        print("---已达到最大生成尝试次数，结束工作流---")
+    if attempts >= 2:
+        print("---已达到同文档内最大生成尝试次数，结束工作流---")
         return "end"
     return "generate"
 
@@ -396,13 +438,14 @@ workflow = StateGraph(GraphState)
 workflow.add_node("generate", generate)
 workflow.add_node("grade_generation", grade_generation)
 workflow.add_node("transform_query", transform_query)
+workflow.add_node("finalize", finalize)
 
 workflow.add_edge(START, "generate")
 workflow.add_conditional_edges(
     "generate",
     route_after_generate,
     {
-        "end": END,
+        "end": "finalize",
         "grade": "grade_generation",
     },
 )
@@ -410,8 +453,7 @@ workflow.add_conditional_edges(
     "grade_generation",
     route_after_grade,
     {
-        "not supported": "generate",
-        "useful": END,
+        "useful": "finalize",
         "not useful": "transform_query",
     },
 )
@@ -420,9 +462,10 @@ workflow.add_conditional_edges(
     should_continue,
     {
         "generate": "generate",
-        "end": END,
+        "end": "finalize",
     },
 )
+workflow.add_edge("finalize", END)
 
 app = workflow.compile()
 
@@ -456,6 +499,8 @@ if __name__ == "__main__":
         "is_grounded_in_docs": False,
         "is_question_answered": False,
         "is_direct_generate": True,
+        "should_retry_retrieval": False,
+        "failure_reason": "skipped",
     }
 
     final_state = app.invoke(inputs)
@@ -463,6 +508,8 @@ if __name__ == "__main__":
     print("\n最终生成答案：")
     print(final_state.get("generation", "N/A"))
     print(f"直接生成模式: {final_state.get('is_direct_generate')}")
+    print(f"建议重检索: {final_state.get('should_retry_retrieval')}")
+    print(f"失败原因: {final_state.get('failure_reason')}")
     if not final_state.get("is_direct_generate"):
         print(f"基于文档: {final_state.get('is_grounded_in_docs')}")
         print(f"回答问题: {final_state.get('is_question_answered')}")

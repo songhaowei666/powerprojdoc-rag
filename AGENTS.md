@@ -7,6 +7,7 @@
 
 ## 目录
 - spec规格文档放在  spec/
+- 局部/待合并的 spec 修订放在 `spec/amendments/pending/<module>/`；合并进主 spec 后移至 `spec/amendments/merged/<module>/`（见 `spec/amendments/README.md`）
 - 测试文件放在 tests/
 - 功能代码放在 src/
 - 参考例子放在 examples/
@@ -25,7 +26,7 @@
 - 改了行为就更新/补测试；不许把失败测试注释掉
 
 ## 用法
-- 修改核心逻辑时，**必须同步更新对应 spec 文档 **，并回复用户更改的spec文件，如果没有找到spec文档，就不要修改代码。
+- 修改核心逻辑时，**必须同步更新对应 spec 文档**（或先在 `spec/amendments/pending/<module>/` 写 amendment，合并时更新主 spec），并回复用户更改的 spec 文件；如果没有找到 spec 文档，就不要修改代码。
 - 所有环境变量、API Key、模型名称统一通过 `config/settings.py` 管理：
 - python环境优先查看 .vscode 中指定的 python.defaultInterpreterPath
 
