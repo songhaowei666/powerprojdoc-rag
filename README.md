@@ -1,35 +1,39 @@
 # PowerProjDoc-RAG
 
-面向**电网基建项目长文档**（建设报告、财务报告等）的**检索增强生成（RAG）系统**。系统支持从 PDF 解析、文本分块、向量化存储到智能检索与答案生成的完整流水线，并基于 LangGraph 实现 Self-RAG 风格的**自适应检索**与**自适应生成**工作流，集成混合检索、LLM 重排、父文档回溯、幻觉检测与答案相关性自检等策略，以提升复杂文档问答的准确性与可解释性。
+面向**电网基建项目长文档**（建设报告、财务报告等）的**检索增强生成（RAG）系统**。系统支持从 PDF 解析、文本分块、向量化存储到智能检索与答案生成的完整流水线，并基于 LangGraph 实现 Self-RAG 风格的**自适应检索**与**自适应生成**工作流，集成混合检索、LLM 重排、父文档回溯、幻觉检测与答案相关性自检等策略。`rag_app` 作为编排层，在生成仍不合格时可依据 `should_retry_retrieval` 触发外层重新检索（默认最多 2 轮），以提升复杂文档问答的准确性与可解释性。
 
 ---
 
 ## 系统架构
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  PDF 解析   │ --> │  文本分块   │ --> │  信息嵌入   │ --> │  向量存储   │
-│ (MinerU)    │     │(Markdown/  │     │(OpenAI     │     │(ChromaDB + │
-│             │     │  JSON)      │     │ Embedding) │     │  BM25)     │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-                                                                    │
-                              ┌─────────────────────────────────────┘
-                              ▼
-                    ┌──────────────────┐
-                    │    RAGApp        │
-                    │  (rag_app.py)    │
-                    └────────┬─────────┘
-                             │
-              ┌──────────────┴──────────────┐
-              ▼                             ▼
-    ┌──────────────────┐          ┌──────────────────┐
-    │ retrieval_graph  │          │  generage_graph  │
-    │ 混合检索 + 相关性 │   docs   │ 生成 + 幻觉检测  │
-    │ 评分 + 查询改写  │ ───────→ │ + 答案评分 + 改写│
-    └──────────────────┘          └──────────────────┘
+<div align="center">
+
+```mermaid
+flowchart TB
+    subgraph offline["离线数据流"]
+        direction TB
+        pdf["PDF 解析 (MinerU)"]
+        chunk["文本分块"]
+        embed["信息嵌入"]
+        store["向量存储 (ChromaDB + BM25)"]
+        pdf --> chunk --> embed --> store
+    end
+
+    subgraph online["在线查询流 · rag_app 默认最多 2 轮"]
+        direction TB
+        ragapp["RAGApp (rag_app.py)"]
+        retrieval["retrieval_graph · 混合检索"]
+        generation["generage_graph · 生成与自检"]
+        done([返回答案与质量标识])
+        ragapp --> retrieval --> generation --> done
+    end
+
+    store -.->|"索引供检索使用"| retrieval
 ```
 
-**查询链路**：用户问题 → `retrieval_graph` 混合检索并过滤相关文档 → `generage_graph` 基于文档生成答案并自检 → 返回答案与质量标识。
+</div>
+
+**查询链路**：用户问题 → `rag_app` 调用 `retrieval_graph` 混合检索并过滤相关文档 → `generage_graph` 基于文档生成答案并自检（同文档内最多 2 次生成）→ 若仍不合格且未达 `max_rag_rounds`，用改写后的问题重新检索并生成 → 返回答案与质量标识。
 
 ---
 
@@ -93,23 +97,19 @@
 
 基于 **LangGraph** 实现的状态机，负责混合检索与相关性过滤，**不生成自然语言答案**：
 
-```
-[开始] --> [混合检索] --is_direct_retrieve=True--> [结束]
-                │
-                │ is_direct_retrieve=False
-                ▼
-         [文档相关性评分]
-                │
-    ┌───────────┼───────────┐
-    │ 有相关     │ 无相关(第1次)│ 无相关(第2次)
-    ▼           ▼           ▼
-  [结束]   [查询改写]     [结束]
-              │
-              ▼
-         [重新检索] --> [文档相关性评分] --> [结束]
+```mermaid
+flowchart TD
+    start_r([开始]) --> hybrid[混合检索]
+    hybrid -->|"is_direct_retrieve=True"| finish_r1([结束])
+    hybrid -->|"is_direct_retrieve=False"| grade[文档相关性评分]
+    grade -->|有相关| finish_r2([结束])
+    grade -->|无相关 第1次| rewrite_r[查询改写]
+    grade -->|无相关 第2次| finish_r3([结束])
+    rewrite_r --> retry[重新检索]
+    retry --> grade
 ```
 
-- 最多 **2 轮**检索，避免无限循环。
+- 最多 **2 次**混合检索（首次 + 改写后 1 次）；第 1 次无相关文档时改写问题再检索，第 2 次仍无相关则返回当前结果。
 - `is_direct_retrieve=True` 时跳过评估，检索一次后直接返回，便于对比测试。
 
 > 相关代码：`src/retrieval_graph.py`  
@@ -119,32 +119,45 @@
 
 基于 **LangGraph** 实现的 Self-RAG 生成侧，给定检索文档生成答案并自检，**不执行检索**：
 
-```
-[开始] --> [生成答案] --is_direct_generate=True--> [结束]
-                │
-                │ is_direct_generate=False
-                ▼
-         [幻觉检测 + 答案相关性评分]
-                │
-    ┌───────────┼───────────────────────┐
-    │ 基于文档且 │ 存在幻觉 / 未回答问题  │
-    │ 回答问题   │                       │
-    ▼           ▼                       │
-  [结束]   [查询改写] --> [重新生成] ◄───┘
-                              │
-                    最多 3 次尝试后结束
+```mermaid
+flowchart TD
+    start_g([开始]) --> generate[生成答案]
+    generate --> direct{is_direct_generate?}
+    direct -->|是| finalize[finalize]
+    direct -->|否| check[幻觉检测 + 答案相关性评分]
+    check --> pass{基于文档且回答问题?}
+    pass -->|是| finalize
+    pass -->|否| rewrite_g[改写问题 transform_query]
+    rewrite_g --> cont{generation_attempts < 2?}
+    cont -->|是| generate
+    cont -->|否| finalize
+    finalize --> end_g([结束<br/>输出 should_retry_retrieval / failure_reason])
 ```
 
-- 幻觉检测：判断生成内容是否严格基于检索文档。
-- 答案相关性：判断生成内容是否回答了用户问题。
-- `is_direct_generate=True` 时跳过评估，生成一次后直接返回。
+- **幻觉检测**：先判断生成是否严格基于检索文档；仅当基于文档时再判断答案相关性。
+- **同文档内重试**：评分失败时改写问题后在**同一批文档**上再生成一次，最多 **2 次**生成（首次 + 改写后 1 次）；不做同输入盲重试。
+- **重检索信号**：同文档内仍失败时，`finalize` 写出 `should_retry_retrieval=True` 与 `failure_reason`（`hallucination` / `not_answered`），由 `rag_app` 编排外层重新检索；本图**不执行检索**。
+- **生成温度**：`RAGGenerator` / 改写器 / 评分器均使用 `temperature=0`（默认 `settings.chat_model` 或 `gpt-4o`）。
+- `is_direct_generate=True` 时跳过评估，生成一次后直接返回（`failure_reason=skipped`）。
 
 > 相关代码：`src/generage_graph.py`  
 > 规格文档：`spec/generage_graph_spec.md`
 
 ### 9. RAG 应用入口（RAG App）
 
-最终编排层，串联检索图与生成图，对外提供统一查询接口：
+最终编排层，串联检索图与生成图，并负责**外层「检索 + 生成」循环**：
+
+```mermaid
+flowchart TD
+    start([run_rag / RAGApp.run]) --> loop{rag_round < max_rag_rounds?}
+    loop -->|是| retrieve[retrieval_graph<br/>working_question]
+    retrieve --> gen[generage_graph]
+    gen --> retry{should_retry_retrieval?}
+    retry -->|否| return([返回结果])
+    retry -->|是| update[working_question ← 生成图改写后的问题]
+    update --> loop
+    loop -->|否| warn[已达轮次上限，返回当前轮结果] --> return
+```
 
 ```python
 from src.rag_app import run_rag
@@ -152,6 +165,7 @@ from src.rag_app import run_rag
 result = run_rag(
     question="工程总投资是多少？",
     company_code="001",
+    max_rag_rounds=2,  # 外层最大轮数，默认 2
 )
 print(result["generation"])
 ```
@@ -160,7 +174,8 @@ print(result["generation"])
 
 | 字段 | 说明 |
 |------|------|
-| `question` | 原始问题 |
+| `question` | 用户原始问题（全程不变） |
+| `working_question` | 最后一轮实际用于检索/生成的问题（可能被生成图改写） |
 | `documents` | 检索到的文档列表 |
 | `generation` | 最终生成的答案 |
 | `has_relevant_docs` | 检索文档是否相关（直接检索模式下未评估） |
@@ -168,6 +183,9 @@ print(result["generation"])
 | `is_grounded_in_docs` | 生成是否基于检索文档（直接生成模式下未评估） |
 | `is_question_answered` | 生成是否回答了用户问题（直接生成模式下未评估） |
 | `is_direct_generate` | 是否使用了直接生成模式 |
+| `should_retry_retrieval` | 最后一轮生成图是否仍建议重检索 |
+| `failure_reason` | 最后一轮失败原因：`ok` / `hallucination` / `not_answered` / `skipped` |
+| `rag_rounds` | 实际执行的外层轮数 |
 
 > 相关代码：`src/rag_app.py`  
 > 规格文档：`spec/rag_app_spec.md`
@@ -203,6 +221,8 @@ cp .env_example .env
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_API_BASE=https://api.openai.com/v1   # 如需自定义 base url
+CHAT_MODEL=gpt-4o                           # 生成/评分/改写，留空时 generage_graph 默认 gpt-4o
+EMBEDDING_MODEL=text-embedding-3-large      # 留空时使用 ingestion 默认值
 
 # 可选
 JINA_API_KEY=...
@@ -210,9 +230,9 @@ MINERU_API_KEY=...
 DASHSCOPE_API_KEY=...
 GEMINI_API_KEY=...
 
-# 数据目录（留空使用默认值）
+# 数据目录（留空使用 config.py 默认值）
 CHROMA_PERSIST_DIR=data/projdoc_data/databases/vector_dbs
-BM25_OUTPUT_DIR=data/projdoc_data/databases/bm25_dbs
+BM25_OUTPUT_DIR=data/projdoc_data/databases/bm25_index   # ingestion 默认；Pipeline 写入 databases/bm25_dbs
 REPORTS_INPUT_DIR=data/projdoc_data/databases/chunked_reports
 ```
 
@@ -234,6 +254,8 @@ print(result["generation"])
 print(f"文档相关: {result['has_relevant_docs']}")
 print(f"基于文档: {result['is_grounded_in_docs']}")
 print(f"回答问题: {result['is_question_answered']}")
+print(f"失败原因: {result['failure_reason']}")
+print(f"外层轮数: {result['rag_rounds']}")
 ```
 
 **对比测试模式**（跳过检索/生成质量评估，加快调试）：
@@ -293,6 +315,7 @@ for r in results:
 │       ├── debug_data/             # 调试中间产物（解析结果、合并报告、Markdown）
 │       └── databases/              # 向量库、分块报告、BM25 索引
 ├── spec/                           # 规格文档（与 src/ 代码同步维护）
+│   ├── amendments/                 # 局部 spec 修订（pending → merged）
 │   ├── rag_app_spec.md
 │   ├── retrieval_graph_spec.md
 │   ├── generage_graph_spec.md
@@ -316,7 +339,7 @@ for r in results:
 │   └── questions_processing.py     # 问题处理与答案生成（遗留模块）
 ├── eval/                           # 评估模块
 │   └── evaluation.py
-├── tests/                          # 测试用例
+├── tests/                          # 测试用例（含 test_rag_app.py 等）
 ├── examples/                       # 使用示例
 └── README.md
 ```
@@ -327,16 +350,18 @@ for r in results:
 
 ### 生成器（Generator）
 
-- 基于 LangGraph 实现 **Self-RAG 生成侧**：生成 → 幻觉检测 → 答案相关性评分 → 查询改写 → 重试，最多 3 次。
+- 基于 LangGraph 实现 **Self-RAG 生成侧**：生成 → 幻觉检测 → 答案相关性评分 → 改写问题 → 同文档再生成；同文档内最多 **2 次**生成。
+- 仍不合格时输出 `should_retry_retrieval`，由 `rag_app` 触发外层重新检索（默认最多 **2 轮**）。
 - 支持 `is_direct_generate` 开关，便于 A/B 对比与调试。
-- 生成严格依据检索文档，禁止引入外部知识。
+- 生成严格依据检索文档（`temperature=0`），禁止引入外部知识。
 
 ### 检索器（Retriever）
 
 - 构建**多路混合检索架构**：Dense Retrieval（ChromaDB + OpenAI Embedding）与 Sparse Retrieval（BM25）相结合；支持按 `company_code` 元数据过滤。
 - 引入**检索前查询优化**：LLM 自动生成 3 个角度的检索变体，并结合元数据过滤构建 ChromaDB `where` 子句。
-- 实现**检索后精排与校正**：向量召回 Top-28，LLM 重排后取 Top-6；结合 LangGraph 实现"检索 → 相关性评分 → 查询改写 → 再检索"闭环，最多 2 轮。
+- 实现**检索后精排与校正**：向量召回 Top-28，LLM 重排后取 Top-6；`retrieval_graph` 内层实现「检索 → 相关性评分 → 查询改写 → 再检索」，最多 2 次检索。
 - 支持**父文档检索**：以子块召回、返回整页父文档作为上下文。
+- **`rag_app` 外层重检索**：生成图返回 `should_retry_retrieval=True` 时，用改写后问题重新走检索+生成（默认最多 2 轮）。
 
 ### 系统评估（Evaluator）
 
