@@ -74,6 +74,53 @@ class EvalDataset:
             raise ValueError(f"评估集 JSON 顶层必须是数组， got {type(data).__name__}")
         return cls(data)
 
+    @classmethod
+    def from_csv(cls, path: Path) -> "EvalDataset":
+        """从 CSV 文件加载评估集。
+
+        参数：
+            path: CSV 文件路径
+
+        返回：
+            EvalDataset 实例
+
+        说明：
+            - expected_source_pages 列支持 JSON 数组字符串（如 "[3,4]"）
+            - 若存在 company_name 列且无 company_code 列，自动映射为 company_code
+        """
+        import json
+
+        header = pd.read_csv(path, nrows=0, encoding="utf-8")
+        dtype: dict = {}
+        for col in ("company_code", "company_name"):
+            if col in header.columns:
+                dtype[col] = str
+        df = pd.read_csv(path, encoding="utf-8", dtype=dtype or None)
+        if "company_name" in df.columns and "company_code" not in df.columns:
+            df = df.rename(columns={"company_name": "company_code"})
+
+        samples: List[dict] = []
+        for _, row in df.iterrows():
+            sample = row.to_dict()
+            pages = sample.get("expected_source_pages")
+            if isinstance(pages, str):
+                sample["expected_source_pages"] = json.loads(pages)
+            elif isinstance(pages, float) and pd.isna(pages):
+                sample["expected_source_pages"] = []
+            samples.append(sample)
+
+        return cls(samples)
+
+    @classmethod
+    def from_path(cls, path: Path) -> "EvalDataset":
+        """按文件后缀自动选择加载方式。"""
+        suffix = path.suffix.lower()
+        if suffix == ".csv":
+            return cls.from_csv(path)
+        if suffix == ".json":
+            return cls.from_json(path)
+        raise ValueError(f"不支持的评估集格式: {suffix}，仅支持 .csv 与 .json")
+
     def __len__(self) -> int:
         return len(self._samples)
 

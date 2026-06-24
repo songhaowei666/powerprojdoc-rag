@@ -84,6 +84,24 @@ langchain-openai
 | `expected_source_pages` | `List[int]` | 是 | 预期来源页面号列表；为空列表时 page_recall@k 不参与计算 |
 | `company_code` | `str` | 是 | 目标公司代码，传递给检索器做文档隔离 |
 
+### 5.2 评估集 CSV (`eval/data/eval_dataset.csv`)
+
+列名与 JSON 字段一致，额外约定：
+
+| 列 | 说明 |
+|----|------|
+| `expected_source_pages` | JSON 数组字符串，如 `"[3,4]"` |
+| `company_code` | 目标公司代码；旧列名 `company_name` 会自动映射 |
+
+示例：
+
+```csv
+question,expected_answer,expected_source_doc,expected_source_pages,company_code
+"问题文本","预期答案","来源文档名","[3,4]","001"
+```
+
+`EvalDataset.from_path(path)` 按后缀自动选择 `from_csv`（`.csv`）或 `from_json`（`.json`）。
+
 ---
 
 ## 6. 指标定义
@@ -131,6 +149,12 @@ class EvalDataset:
     @classmethod
     def from_json(cls, path: Path) -> "EvalDataset"
     
+    @classmethod
+    def from_csv(cls, path: Path) -> "EvalDataset"
+    
+    @classmethod
+    def from_path(cls, path: Path) -> "EvalDataset"
+    
     def __len__(self) -> int
     
     def __getitem__(self, idx: int) -> dict
@@ -139,6 +163,8 @@ class EvalDataset:
 ```
 
 - `from_json` 从 JSON 文件加载评估集，不做字段强校验，但要求顶层为数组
+- `from_csv` 从 CSV 文件加载；`expected_source_pages` 支持 JSON 字符串解析；`company_name` 列自动映射为 `company_code`
+- `from_path` 按后缀 `.csv` / `.json` 自动分发
 - `to_list` 返回内部样本列表的浅拷贝
 
 ---
@@ -273,6 +299,37 @@ class SingleTurnEvaluator:
 
 ---
 
+### 7.5 报告生成（`eval/report.py`）
+
+```python
+def save_detail_csv(df: pd.DataFrame, path: Path) -> None
+
+def generate_markdown_report(
+    df: pd.DataFrame,
+    *,
+    dataset_path: Path,
+    top_k: int,
+    output_path: Path,
+    run_timestamp: Optional[datetime] = None,
+) -> str
+```
+
+| 函数 | 说明 |
+|------|------|
+| `save_detail_csv` | 将 `run_batch` 返回的 DataFrame 写入 CSV；`expected_source_pages` 序列化为 JSON 字符串 |
+| `generate_markdown_report` | 生成 Markdown 报告并写入文件；返回报告文本 |
+
+**Markdown 报告结构**：
+
+| 章节 | 内容 |
+|------|------|
+| 运行信息 | 时间戳、数据集路径、样本数、top_k、评估模型 |
+| 汇总指标 | 各数值列 mean 与 NaN 样本数 |
+| 分项明细 | 每题 question、指标得分、generation 摘要（截断 200 字） |
+| 低分样本 | 任一指标 < 0.5 或 NaN 的样本 |
+
+---
+
 ## 8. 使用示例
 
 ### 8.1 批量离线评估
@@ -308,6 +365,26 @@ result = evaluator.evaluate(
 print(result)
 ```
 
+### 8.3 CLI 离线评估
+
+```bash
+python eval/run_offline_eval.py \
+  --dataset eval/data/eval_dataset.csv \
+  --top-k 6 \
+  --output-dir eval/reports
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--dataset` | `eval/data/eval_dataset.csv` | 评估集路径（`.csv` 或 `.json`） |
+| `--top-k` | `6` | page_recall@k 截止位置 |
+| `--output-dir` | `eval/reports/` | 报告输出目录 |
+| `--prefix` | 时间戳 `YYYYMMDD_HHMMSS` | 输出文件名前缀 |
+
+输出文件：
+- `{prefix}_detail.csv`：逐样本明细
+- `{prefix}_report.md`：Markdown 汇总报告
+
 ---
 
 ## 9. 性能与限制
@@ -325,6 +402,7 @@ print(result)
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
-| v1.2 | 2026-06-14 | 将自定义页面指标从 `page_precision@k` 改为 `page_recall@k`，公式从 `hits / k` 调整为 `unique hits / |expected_pages|` |
+| v1.3 | 2026-06-24 | 新增 CSV 加载（`from_csv`/`from_path`）、报告生成（`eval/report.py`）与 CLI（`eval/run_offline_eval.py`） |
+| v1.2 | 2026-06-14 | 将自定义页面指标从 `page_precision@k` 改为 `page_recall@k`，公式从 `hits / k` 调整为 `unique hits / \|expected_pages\|` |
 | v1.1 | 2026-06-12 | 将评估模块从 `src/evaluation.py` 迁移到 `eval/evaluation.py`，评估代码统一放入 `eval/` 目录 |
 | v1.0 | 2026-06-11 | 初始版本；定义评估集 schema、page_precision@k、ragas 五指标、批量/单条两种评估器 |

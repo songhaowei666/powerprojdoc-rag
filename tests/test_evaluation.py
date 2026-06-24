@@ -23,6 +23,7 @@ from eval.evaluation import (
     SingleTurnEvaluator,
     compute_page_recall_at_k,
 )
+from eval.report import generate_markdown_report, save_detail_csv
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,50 @@ def sample_eval_json(tmp_path):
     path = tmp_path / "eval.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def sample_eval_csv(tmp_path):
+    """Write a sample evaluation CSV and return its path."""
+    content = (
+        "question,expected_answer,expected_source_doc,expected_source_pages,company_code\n"
+        '"Q1","A1","doc1","[1, 2]","001"\n'
+        '"Q2","A2","doc2","[5]","001"\n'
+    )
+    path = tmp_path / "eval.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def sample_eval_csv_legacy_company_name(tmp_path):
+    """CSV with legacy company_name column."""
+    content = (
+        "question,expected_answer,expected_source_doc,expected_source_pages,company_name\n"
+        '"Q1","A1","doc1","[1]","001"\n'
+    )
+    path = tmp_path / "eval_legacy.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def sample_result_df():
+    """Sample evaluation result DataFrame for report tests."""
+    return pd.DataFrame(
+        {
+            "question": ["Q1", "Q2"],
+            "expected_answer": ["A1", "A2"],
+            "generation": ["G1", "G2"],
+            "expected_source_pages": [[1, 2], [5]],
+            "page_recall@k": [0.5, 1.0],
+            "context_precision": [0.8, 0.3],
+            "context_recall": [0.7, 0.6],
+            "faithfulness": [0.9, 0.85],
+            "answer_relevancy": [0.85, 0.8],
+            "answer_correctness": [0.75, 0.7],
+        }
+    )
 
 
 @pytest.fixture
@@ -101,6 +146,67 @@ class TestEvalDataset:
         dataset = EvalDataset.from_json(sample_eval_json)
         with pytest.raises(IndexError):
             _ = dataset[10]
+
+    def test_from_csv(self, sample_eval_csv):
+        dataset = EvalDataset.from_csv(sample_eval_csv)
+        assert len(dataset) == 2
+        assert dataset[0]["question"] == "Q1"
+        assert dataset[0]["expected_source_pages"] == [1, 2]
+        assert dataset[0]["company_code"] == "001"
+        assert dataset[1]["expected_source_pages"] == [5]
+
+    def test_from_csv_legacy_company_name(self, sample_eval_csv_legacy_company_name):
+        dataset = EvalDataset.from_csv(sample_eval_csv_legacy_company_name)
+        assert dataset[0]["company_code"] == "001"
+        assert "company_name" not in dataset[0]
+
+    def test_from_path_csv(self, sample_eval_csv):
+        dataset = EvalDataset.from_path(sample_eval_csv)
+        assert len(dataset) == 2
+
+    def test_from_path_json(self, sample_eval_json):
+        dataset = EvalDataset.from_path(sample_eval_json)
+        assert len(dataset) == 2
+
+    def test_from_path_unsupported(self, tmp_path):
+        path = tmp_path / "eval.txt"
+        path.write_text("dummy", encoding="utf-8")
+        with pytest.raises(ValueError, match="不支持的评估集格式"):
+            EvalDataset.from_path(path)
+
+
+# ---------------------------------------------------------------------------
+# Report Tests
+# ---------------------------------------------------------------------------
+
+class TestReport:
+    """Tests for eval/report.py."""
+
+    def test_save_detail_csv(self, sample_result_df, tmp_path):
+        out_path = tmp_path / "detail.csv"
+        save_detail_csv(sample_result_df, out_path)
+        assert out_path.exists()
+        loaded = pd.read_csv(out_path, encoding="utf-8")
+        assert len(loaded) == 2
+        assert loaded.loc[0, "question"] == "Q1"
+        assert "[1, 2]" in loaded.loc[0, "expected_source_pages"]
+
+    def test_generate_markdown_report(self, sample_result_df, tmp_path):
+        dataset_path = tmp_path / "eval.csv"
+        report_path = tmp_path / "report.md"
+        content = generate_markdown_report(
+            sample_result_df,
+            dataset_path=dataset_path,
+            top_k=6,
+            output_path=report_path,
+        )
+        assert report_path.exists()
+        assert "RAG 离线评估报告" in content
+        assert "样本数: 2" in content
+        assert "page_recall@k" in content
+        assert "低分样本" in content
+        # Q2 context_precision=0.3 应出现在低分样本
+        assert "Q2" in content
 
 
 # ---------------------------------------------------------------------------
