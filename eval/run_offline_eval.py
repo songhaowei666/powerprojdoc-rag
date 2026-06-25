@@ -3,8 +3,14 @@
 RAG 离线批量评估 CLI。
 
 用法：
+    # 默认每次评 1 条（节省 token）
     python eval/run_offline_eval.py
-    python eval/run_offline_eval.py --dataset eval/data/eval_dataset.csv --top-k 6
+
+    # 评第 2 条（索引 1）
+    python eval/run_offline_eval.py --offset 1
+
+    # 评完全部 6 条
+    python eval/run_offline_eval.py --limit 0
 """
 
 from __future__ import annotations
@@ -53,6 +59,18 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="输出文件名前缀；默认使用时间戳 YYYYMMDD_HHMMSS",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=1,
+        help="本次评估样本数，默认 1（逐条评估节省 token）；传 0 表示评估全部",
+    )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="起始样本索引（0-based），默认 0",
+    )
     return parser.parse_args()
 
 
@@ -73,11 +91,19 @@ def main() -> int:
 
     print(f"[信息] 加载评估集: {dataset_path}")
     dataset = EvalDataset.from_path(dataset_path)
-    print(f"[信息] 样本数: {len(dataset)}")
+    limit = None if args.limit == 0 else args.limit
+    total = len(dataset)
+    end = min(args.offset + limit, total) if limit is not None else total
+    print(f"[信息] 评估集共 {total} 条，本次评估 [{args.offset}, {end}) 共 {end - args.offset} 条")
 
-    print(f"[信息] 开始批量评估 (top_k={args.top_k})...")
+    print(f"[信息] 开始逐条评估 (top_k={args.top_k})...")
     evaluator = RAGEvaluator()
-    df = evaluator.run_batch(dataset, top_k=args.top_k)
+    df = evaluator.run_batch(
+        dataset,
+        top_k=args.top_k,
+        limit=limit,
+        offset=args.offset,
+    )
 
     print(f"[信息] 写入明细 CSV: {detail_path}")
     save_detail_csv(df, detail_path)

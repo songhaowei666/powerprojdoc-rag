@@ -25,23 +25,52 @@ sys.path.insert(0, str(ROOT_DIR))
 
 import pandas as pd
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import OpenAIEmbeddings
 
 from ragas import evaluate
 from ragas.dataset_schema import EvaluationDataset
-from ragas.metrics.collections import (
-    answer_correctness,
-    answer_relevancy,
-    context_precision,
-    context_recall,
-    faithfulness,
-)
+from ragas.metrics._answer_correctness import answer_correctness
+from ragas.metrics._answer_relevance import answer_relevancy
+from ragas.metrics._context_precision import context_precision
+from ragas.metrics._context_recall import context_recall
+from ragas.metrics._faithfulness import faithfulness
 
 from src.config import settings
 from src.generage_graph import build_llm
 
 if TYPE_CHECKING:
     from src.rag_app import RAGApp
+
+RAGAS_COLS = [
+    "context_precision",
+    "context_recall",
+    "faithfulness",
+    "answer_relevancy",
+    "answer_correctness",
+]
+
+
+def build_evaluator_embeddings() -> OpenAIEmbeddings:
+    """基于项目配置构建 ragas 评估用 Embedding 实例。"""
+    return OpenAIEmbeddings(
+        model=settings.embedding_model or "text-embedding-3-large",
+        openai_api_key=settings.openai_api_key,
+        openai_api_base=settings.openai_api_base or None,
+    )
+
+
+def build_ragas_metrics(*, has_reference: bool) -> list:
+    """构建 ragas 已实例化的标准指标列表（兼容 evaluate 的 llm 注入）。"""
+    metrics = [
+        context_precision,
+        faithfulness,
+        answer_relevancy,
+    ]
+    if has_reference:
+        metrics.extend([context_recall, answer_correctness])
+    return metrics
 
 
 # ---------------------------------------------------------------------------
@@ -180,12 +209,14 @@ class RAGEvaluator:
         self,
         rag_app: Optional[RAGApp] = None,
         evaluator_llm: Optional[BaseChatModel] = None,
+        evaluator_embeddings: Optional[Embeddings] = None,
     ):
         """初始化评估器。
 
         参数：
             rag_app: 注入的 RAG 应用实例；为 None 时使用默认 RAGApp()
             evaluator_llm: 传给 ragas 的评估 LLM；为 None 时通过 build_llm(temperature=0) 构造
+            evaluator_embeddings: 传给 ragas 的 Embedding；为 None 时通过 build_evaluator_embeddings() 构造
         """
         if rag_app is not None:
             self.rag_app = rag_app
@@ -194,114 +225,105 @@ class RAGEvaluator:
 
             self.rag_app = RAGApp()
         self.evaluator_llm = evaluator_llm if evaluator_llm is not None else build_llm(temperature=0)
+        self.evaluator_embeddings = (
+            evaluator_embeddings
+            if evaluator_embeddings is not None
+            else build_evaluator_embeddings()
+        )
 
-    def run_batch(self, dataset: EvalDataset, top_k: int = 6) -> pd.DataFrame:
-        """对评估集执行批量评估。
+    def run_batch(
+        self,
+        dataset: EvalDataset,
+        top_k: int = 6,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> pd.DataFrame:
+        """对评估集执行批量评估（逐条 RAG + ragas，节省 token 且可增量输出）。
 
         参数：
             dataset: 评估集
             top_k: 页面召回率的评估截止位置
+            limit: 最多评估条数；为 None 时评估 offset 之后的全部样本
+            offset: 起始样本索引（0-based）
 
         返回：
             包含所有评估指标的 DataFrame
 
         异常：
-            RuntimeError: ragas 评估阶段整体失败时抛出
+            RuntimeError: 单条 ragas 评估失败时抛出
         """
-        samples = dataset.to_list()
-        rag_results: List[dict] = []
-        failed_indices: List[int] = []
+        all_samples = dataset.to_list()
+        if offset < 0:
+            raise ValueError("offset 不能小于 0")
+        if offset >= len(all_samples):
+            raise ValueError(f"offset={offset} 超出评估集范围（共 {len(all_samples)} 条）")
 
-        # 1. 执行 RAG
-        for idx, sample in enumerate(samples):
+        end = offset + limit if limit is not None else len(all_samples)
+        samples = all_samples[offset:end]
+        single_evaluator = SingleTurnEvaluator(
+            evaluator_llm=self.evaluator_llm,
+            evaluator_embeddings=self.evaluator_embeddings,
+        )
+        rows: List[dict] = []
+
+        for local_idx, sample in enumerate(samples):
+            global_idx = offset + local_idx
             question = sample.get("question", "")
             company_code = sample.get("company_code", "")
-            try:
-                result = self.rag_app.run(question, company_code)
-                rag_results.append(result)
-            except Exception as exc:
-                print(f"[警告] 样本评估失败: question={question}, error={exc}")
-                failed_indices.append(idx)
-                rag_results.append(
-                    {
-                        "question": question,
-                        "generation": "",
-                        "documents": [],
-                    }
-                )
-
-        # 2. 计算 page_recall@k
-        page_recalls: List[Optional[float]] = []
-        for sample, result in zip(samples, rag_results):
-            docs = result.get("documents", [])
+            expected_answer = sample.get("expected_answer", "")
             expected_pages = sample.get("expected_source_pages", [])
-            pr = compute_page_recall_at_k(docs, expected_pages, top_k)
-            page_recalls.append(pr)
 
-        # 3. 构建 ragas 数据集
-        ragas_samples = []
-        for sample, result in zip(samples, rag_results):
-            ragas_samples.append(
-                {
-                    "user_input": sample.get("question", ""),
-                    "response": result.get("generation", ""),
-                    "retrieved_contexts": [
-                        d.page_content for d in result.get("documents", [])
-                    ],
-                    "reference": sample.get("expected_answer", ""),
+            print(
+                f"[信息] 评估样本 {local_idx + 1}/{len(samples)} "
+                f"(索引 {global_idx}): {question[:40]}..."
+            )
+
+            try:
+                rag_result = self.rag_app.run(question, company_code)
+                generation = rag_result.get("generation", "")
+                documents = rag_result.get("documents", [])
+            except Exception as exc:
+                print(f"[警告] 样本 RAG 失败: question={question}, error={exc}")
+                row = {
+                    "question": question,
+                    "expected_answer": expected_answer,
+                    "generation": "",
+                    "expected_source_pages": expected_pages,
+                    "page_recall@k": 0.0 if expected_pages else None,
                 }
-            )
+                for col in RAGAS_COLS:
+                    row[col] = float("nan")
+                rows.append(row)
+                continue
 
-        ragas_dataset = EvaluationDataset.from_list(ragas_samples)
+            try:
+                metrics = single_evaluator.evaluate(
+                    question=question,
+                    generation=generation,
+                    documents=documents,
+                    expected_answer=expected_answer,
+                    expected_pages=expected_pages,
+                    top_k=top_k,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"ragas 评估失败 (样本索引 {global_idx}): {exc}"
+                ) from exc
 
-        # 4. ragas 批量评估
-        try:
-            ragas_result = evaluate(
-                ragas_dataset,
-                metrics=[
-                    context_precision,
-                    context_recall,
-                    faithfulness,
-                    answer_relevancy,
-                    answer_correctness,
-                ],
-                llm=self.evaluator_llm,
-            )
-            ragas_df = ragas_result.to_pandas()
-        except Exception as exc:
-            raise RuntimeError(f"ragas 评估失败: {exc}") from exc
-
-        # 5. 组装结果
-        df = pd.DataFrame(
-            {
-                "question": [s.get("question", "") for s in samples],
-                "expected_answer": [s.get("expected_answer", "") for s in samples],
-                "generation": [r.get("generation", "") for r in rag_results],
-                "expected_source_pages": [
-                    s.get("expected_source_pages", []) for s in samples
-                ],
-                "page_recall@k": page_recalls,
+            row = {
+                "question": question,
+                "expected_answer": expected_answer,
+                "generation": generation,
+                "expected_source_pages": expected_pages,
+                **metrics,
             }
-        )
+            rows.append(row)
+            print(
+                f"  page_recall@k={metrics.get('page_recall@k')}, "
+                f"faithfulness={metrics.get('faithfulness')}"
+            )
 
-        ragas_cols = [
-            "context_precision",
-            "context_recall",
-            "faithfulness",
-            "answer_relevancy",
-            "answer_correctness",
-        ]
-        for col in ragas_cols:
-            if col in ragas_df.columns:
-                df[col] = ragas_df[col].values
-
-        # RAG 失败的样本，ragas 指标置为 NaN
-        for idx in failed_indices:
-            for col in ragas_cols:
-                if col in df.columns:
-                    df.loc[idx, col] = float("nan")
-
-        return df
+        return pd.DataFrame(rows)
 
 
 class SingleTurnEvaluator:
@@ -310,13 +332,20 @@ class SingleTurnEvaluator:
     def __init__(
         self,
         evaluator_llm: Optional[BaseChatModel] = None,
+        evaluator_embeddings: Optional[Embeddings] = None,
     ):
         """初始化评估器。
 
         参数：
             evaluator_llm: 传给 ragas 的评估 LLM；为 None 时通过 build_llm(temperature=0) 构造
+            evaluator_embeddings: 传给 ragas 的 Embedding；为 None 时通过 build_evaluator_embeddings() 构造
         """
         self.evaluator_llm = evaluator_llm if evaluator_llm is not None else build_llm(temperature=0)
+        self.evaluator_embeddings = (
+            evaluator_embeddings
+            if evaluator_embeddings is not None
+            else build_evaluator_embeddings()
+        )
 
     def evaluate(
         self,
@@ -362,19 +391,14 @@ class SingleTurnEvaluator:
 
         dataset = EvaluationDataset.from_list([sample])
 
-        metrics = [
-            context_precision,
-            faithfulness,
-            answer_relevancy,
-        ]
-        if has_reference:
-            metrics.extend([context_recall, answer_correctness])
+        metrics = build_ragas_metrics(has_reference=has_reference)
 
         try:
             ragas_result = evaluate(
                 dataset,
                 metrics=metrics,
                 llm=self.evaluator_llm,
+                embeddings=self.evaluator_embeddings,
             )
             ragas_df = ragas_result.to_pandas()
         except Exception as exc:

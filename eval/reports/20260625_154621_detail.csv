@@ -1,0 +1,2 @@
+question,expected_answer,generation,expected_source_pages,page_recall@k,context_precision,faithfulness,answer_relevancy,context_recall,answer_correctness
+华东电网500kV输变电工程的项目建设目标是什么？,项目建设目标是提升华东区域电网输电能力和供电可靠性，满足负荷增长与新能源接入需求。,华东电网500kV输变电工程的建设目标是提升华东区域主干网架输电能力和供电可靠性，满足负荷增长、新能源接入以及跨区电力互济需求，强化苏南、浙北负荷中心之间的电气联系，提高长三角重点城市群的供电保障能力。,"[3, 4]",0.0,0.8333333332916666,1.0,,1.0,

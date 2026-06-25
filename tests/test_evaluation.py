@@ -100,16 +100,16 @@ def sample_result_df():
 
 @pytest.fixture
 def mock_ragas_result():
-    """Return a mock ragas Result whose to_pandas() yields a DataFrame."""
+    """Return a mock ragas Result whose to_pandas() yields a single-row DataFrame."""
     class MockResult:
         def to_pandas(self):
             return pd.DataFrame(
                 {
-                    "context_precision": [0.8, 0.7],
-                    "context_recall": [0.7, 0.6],
-                    "faithfulness": [0.9, 0.85],
-                    "answer_relevancy": [0.85, 0.8],
-                    "answer_correctness": [0.75, 0.7],
+                    "context_precision": [0.8],
+                    "context_recall": [0.7],
+                    "faithfulness": [0.9],
+                    "answer_relevancy": [0.85],
+                    "answer_correctness": [0.75],
                 }
             )
 
@@ -307,6 +307,7 @@ class TestSingleTurnEvaluator:
         assert result["faithfulness"] == 0.9
         assert result["answer_relevancy"] == 0.85
         assert result["answer_correctness"] == 0.75
+        assert mock_evaluate.call_args.kwargs["embeddings"] is evaluator.evaluator_embeddings
 
     @patch("eval.evaluation.evaluate")
     def test_evaluate_no_expected_pages(self, mock_evaluate, mock_ragas_result, mock_llm):
@@ -338,12 +339,12 @@ class TestSingleTurnEvaluator:
         )
 
         called_metrics = mock_evaluate.call_args.kwargs["metrics"]
-        metric_names = [m.__name__ for m in called_metrics]
-        assert not any("context_recall" in n for n in metric_names)
-        assert not any("answer_correctness" in n for n in metric_names)
-        assert any("context_precision" in n for n in metric_names)
-        assert any("faithfulness" in n for n in metric_names)
-        assert any("answer_relevancy" in n for n in metric_names)
+        metric_names = [type(m).__name__ for m in called_metrics]
+        assert "ContextRecall" not in metric_names
+        assert "AnswerCorrectness" not in metric_names
+        assert "ContextPrecision" in metric_names
+        assert "Faithfulness" in metric_names
+        assert "AnswerRelevancy" in metric_names
 
     @patch("eval.evaluation.evaluate")
     def test_evaluate_ragas_failure(self, mock_evaluate, mock_llm):
@@ -401,8 +402,30 @@ class TestRAGEvaluator:
         assert df.loc[0, "page_recall@k"] == 0.5
         # Sample 1: pages [5] vs expected [5] -> 1 unique hit / 1 expected = 1.0
         assert df.loc[1, "page_recall@k"] == 1.0
+        assert df.loc[1, "faithfulness"] == 0.9
         mock_rag_app.run.assert_any_call("Q1", "000001")
         mock_rag_app.run.assert_any_call("Q2", "000001")
+        assert mock_evaluate.call_count == 2
+
+    @patch("eval.evaluation.evaluate")
+    def test_run_batch_limit_offset(self, mock_evaluate, mock_ragas_result, mock_llm, sample_eval_json):
+        mock_evaluate.return_value = mock_ragas_result
+
+        mock_rag_app = MagicMock()
+        mock_rag_app.run.return_value = {
+            "question": "Q2",
+            "generation": "G2",
+            "documents": [Document(page_content="c3", metadata={"page": 5})],
+        }
+
+        dataset = EvalDataset.from_json(sample_eval_json)
+        evaluator = RAGEvaluator(rag_app=mock_rag_app, evaluator_llm=mock_llm)
+        df = evaluator.run_batch(dataset, top_k=2, limit=1, offset=1)
+
+        assert len(df) == 1
+        assert df.loc[0, "question"] == "Q2"
+        mock_rag_app.run.assert_called_once_with("Q2", "000001")
+        assert mock_evaluate.call_count == 1
 
     @patch("eval.evaluation.evaluate")
     def test_run_batch_rag_failure_continues(self, mock_evaluate, mock_ragas_result, mock_llm, sample_eval_json):
@@ -443,5 +466,5 @@ class TestRAGEvaluator:
 
         dataset = EvalDataset.from_json(sample_eval_json)
         evaluator = RAGEvaluator(rag_app=mock_rag_app, evaluator_llm=mock_llm)
-        with pytest.raises(RuntimeError, match="ragas 失败"):
+        with pytest.raises(RuntimeError, match="ragas 评估失败 \\(样本索引 0\\)"):
             evaluator.run_batch(dataset)
